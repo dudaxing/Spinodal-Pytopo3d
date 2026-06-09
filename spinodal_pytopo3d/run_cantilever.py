@@ -100,6 +100,7 @@ def run(args):
                 move_z=0.05, move_frac=0.05, move_angle=0.25, Emin=Emin,
                 penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
                 beta0=0.1, beta_add=0.5, beta_period=15, beta_max=25.0,
+                angle_subiters=30, angle_period=25, angle_phase_iter=150,
                 max_iter=args.maxiter,
             )
         else:
@@ -114,9 +115,12 @@ def run(args):
         f = res["c"]
         ratio = f / f0
         verdict = "beats solid (f/f0<1)" if ratio < 1 else "porous trade-off (f/f0>1)"
+        frac_summary = _frac_summary(res["Frac"])
         print(f"\n[spinodal:{case}] f = {f:.6e} | f/f0 = {ratio:.4f}  -> {verdict}")
+        print(f"[spinodal:{case}] Frac { _format_frac_summary(frac_summary) }")
         summary[case] = {"f": f, "ratio": ratio,
-                         "mean_V": float(np.mean(res["V"]))}
+                         "mean_V": float(np.mean(res["V"])),
+                         "frac_summary": frac_summary}
 
         label = f"{case}{args.tag}"
         np.savez(
@@ -126,6 +130,14 @@ def run(args):
             c=f, f0=f0, ratio=ratio,
             history_c=np.array(res["history"]["c"]),
             history_vol=np.array(res["history"]["vol"]),
+            history_g=np.array(res["history"]["g"]),
+            history_change=np.array(res["history"]["change"]),
+            history_beta=np.array(res["history"]["beta"]),
+            history_penal=np.array(res["history"]["penal"]),
+            frac_min=frac_summary["min"], frac_max=frac_summary["max"],
+            frac_p10=frac_summary["p10"], frac_p50=frac_summary["p50"],
+            frac_p90=frac_summary["p90"], frac_hi065=frac_summary["hi065"],
+            frac_lo035=frac_summary["lo035"],
             nelx=nelx, nely=nely, nelz=nelz, volfrac=args.volfrac,
         )
         _save_plots(res, label, f0)
@@ -149,8 +161,29 @@ def run(args):
     print(f"f0 (solid SIMP)         = {f0:.6e}")
     for case in cases:
         s = summary[case]
-        print(f"{case:6s}: f = {s['f']:.6e}  f/f0 = {s['ratio']:.4f}  meanV = {s['mean_V']:.4f}")
+        print(f"{case:6s}: f = {s['f']:.6e}  f/f0 = {s['ratio']:.4f}  "
+              f"meanV = {s['mean_V']:.4f}  Frac { _format_frac_summary(s['frac_summary']) }")
     return summary
+
+
+def _frac_summary(frac):
+    frac = np.asarray(frac, dtype=float).ravel()
+    p10, p50, p90 = np.percentile(frac, [10, 50, 90])
+    return {
+        "min": float(np.min(frac)),
+        "max": float(np.max(frac)),
+        "p10": float(p10),
+        "p50": float(p50),
+        "p90": float(p90),
+        "hi065": float(np.mean(frac >= 0.65)),
+        "lo035": float(np.mean(frac <= 0.35)),
+    }
+
+
+def _format_frac_summary(s):
+    return (f"min={s['min']:.3f} p10={s['p10']:.3f} p50={s['p50']:.3f} "
+            f"p90={s['p90']:.3f} max={s['max']:.3f} "
+            f"hi>=0.65={100*s['hi065']:.1f}% lo<=0.35={100*s['lo035']:.1f}%")
 
 
 def _save_plots(res, case, f0):

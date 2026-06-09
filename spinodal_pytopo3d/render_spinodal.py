@@ -6,8 +6,8 @@ Embed and render the columnar spinodal microstructure for an optimized cantileve
 Pipeline:
   1. macro envelope  : rho_bar >= thresh -> signed-distance field -> smoothed level set
   2. micro embedding : per coarse cell, columnar GRF with LOCAL density (Frac) and
-                       LOCAL orientation R(alpha,beta,gamma); solid where phi >= cutoff
-  3. union -> marching cubes -> PyVista render (teal), PNG (+ optional PLY)
+                       LOCAL orientation R(alpha,beta,gamma); solid where phi <= cutoff
+  3. intersection -> marching cubes -> PyVista render (teal), PNG (+ optional PLY)
 
 Key vs the cloak script:
   * reads .npz, takes nelx/nely/nelz from the file (element order already matches),
@@ -129,6 +129,7 @@ def owner_ranges(owners, n):
 
 # ---------------------------------------------------------------- macro envelope
 def build_smooth_macro_field(mask, xc, yc, zc, spc, sigma_cells, volume_correct):
+    """Smoothed macro signed-distance field, negative inside the macro body."""
     ny, nx, nz = mask.shape
     ixo, iyo, izo = owner_indices(xc, nx), owner_indices(yc, ny), owner_indices(zc, nz)
     inside = ((xc[:, None, None] >= 0) & (xc[:, None, None] <= nx)
@@ -158,6 +159,13 @@ def nearest_material_index_map(mask):
 # ---------------------------------------------------------------- micro embedding
 def build_spinodal_field(mask, frac, alpha, beta, gamma, xc, yc, zc, m, n_waves, seed,
                          phases=None):
+    """Return a positive-inside microstructure level set.
+
+    The paper's density rho is solid volume fraction. Since the GRF is standard
+    normal in distribution, solid is phi <= sqrt(2)*erfinv(2*rho-1), whose
+    probability is rho. The returned field is cutoff - phi, so field >= 0 means
+    solid.
+    """
     ny, nx, nz = mask.shape
     ixo, iyo, izo = owner_indices(xc, nx), owner_indices(yc, ny), owner_indices(zc, nz)
     xr, yr, zr = owner_ranges(ixo, nx), owner_ranges(iyo, ny), owner_ranges(izo, nz)
@@ -186,7 +194,7 @@ def build_spinodal_field(mask, frac, alpha, beta, gamma, xc, yc, zc, m, n_waves,
                 ang = pts @ vecs.T
                 ang *= kappa; ang += phases[None, :]; np.cos(ang, out=ang)
                 phi = ang.sum(axis=1).astype(np.float32) * np.float32(np.sqrt(2.0 / n_waves))
-                micro[xs, ys, zs] = (phi - cut).reshape((len(xg), len(yg), len(zg)))
+                micro[xs, ys, zs] = (cut - phi).reshape((len(xg), len(yg), len(zg)))
                 done += 1
                 if done == 1 or done % step == 0 or done == total:
                     print(f"  micro [{done:4d}/{total}] {time.time()-t0:.1f}s")
@@ -237,8 +245,44 @@ def density_scalars(mesh, frac_yxz, nx, ny, nz):
     return frac_yxz[iy, ix, iz]
 
 
+def _crop_png_whitespace(path, pad=50, threshold=8):
+    """Crop large white margins from a rendered PNG; best-effort only."""
+    try:
+        from PIL import Image, ImageChops
+        img = Image.open(path).convert("RGB")
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        diff = ImageChops.difference(img, bg).convert("L")
+        bbox = diff.point(lambda p: 255 if p > threshold else 0).getbbox()
+        if bbox is None:
+            return
+        left = max(0, bbox[0] - pad)
+        top = max(0, bbox[1] - pad)
+        right = min(img.size[0], bbox[2] + pad)
+        bottom = min(img.size[1], bbox[3] + pad)
+        if right - left > 0 and bottom - top > 0:
+            img.crop((left, top, right, bottom)).save(path)
+    except Exception as exc:
+        print(f"[crop] skipped ({exc})")
+
+
+def _add_png_title(path, title, font_size=42, margin=18):
+    """Add a compact title after cropping so text does not preserve white margins."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.open(path).convert("RGB")
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+        draw.text((margin, margin), title, fill="black", font=font)
+        img.save(path)
+    except Exception as exc:
+        print(f"[title] skipped ({exc})")
+
+
 def render(mesh, out_png, nx, ny, nz, color="#4DB6AC", box=True, size=(2200, 1500),
-           annotate=False, scalars=None, title=None):
+           annotate=False, scalars=None, title=None, presentation=False):
     import pyvista as pv
     pv.OFF_SCREEN = True
     pl = pv.Plotter(off_screen=True, window_size=list(size))
@@ -262,8 +306,9 @@ def render(mesh, out_png, nx, ny, nz, color="#4DB6AC", box=True, size=(2200, 150
                              tip_radius=0.09), color="magenta")
         pl.add_point_labels([(nx, ny / 2, nz + alen)], ["Load"], font_size=26,
                             text_color="magenta", shape=None, show_points=False)
-        pl.add_axes(xlabel="x1", ylabel="x2", zlabel="x3", line_width=3)
-        if title:
+        if not presentation:
+            pl.add_axes(xlabel="x1", ylabel="x2", zlabel="x3", line_width=3)
+        if title and not presentation:
             pl.add_text(title, position="upper_left", font_size=18, color="black")
     try:
         pl.enable_eye_dome_lighting()
@@ -273,10 +318,14 @@ def render(mesh, out_png, nx, ny, nz, color="#4DB6AC", box=True, size=(2200, 150
     pl.camera_position = [(1.9 * nx, -1.5 * ny, 1.25 * nz),
                           (nx / 2, ny / 2, nz / 2), (0, 0, 1)]
     pl.reset_camera()
-    pl.camera.zoom(0.9)
+    pl.camera.zoom(1.35 if presentation else 0.9)
     Path(out_png).parent.mkdir(parents=True, exist_ok=True)
     pl.screenshot(str(out_png))
     pl.close()
+    if presentation:
+        _crop_png_whitespace(out_png)
+        if title:
+            _add_png_title(out_png, title)
     print(f"saved {out_png}")
 
 
@@ -301,6 +350,8 @@ def main():
     p.add_argument("--no-png", action="store_true", help="skip the rendered PNG")
     p.add_argument("--annotate", action="store_true", help="load arrow, axes, f/f0 label")
     p.add_argument("--color-by-density", action="store_true", help="color surface by Frac")
+    p.add_argument("--presentation", action="store_true",
+                   help="tighter literature-style render: zoomed camera, no axes, cropped whitespace")
     p.add_argument("--declutter", action="store_true",
                    help="remove floating bits via 3D connected components (keep largest)")
     p.add_argument("--declutter-min-frac", type=float, default=0.0,
@@ -327,13 +378,14 @@ def main():
     phases = global_phases(args.seed, args.n_waves)
 
     macro = build_smooth_macro_field(mask, xc, yc, zc, spc, args.macro_sigma, True)
+    macro_solid = -macro  # positive inside, matching build_spinodal_field()
     if args.envelope_only:
-        final = macro
+        final = macro_solid
     else:
         micro = build_spinodal_field(mask, fields["Frac"], fields["alpha"],
                                      fields["beta"], fields["gamma"], xc, yc, zc,
                                      m_eff, args.n_waves, args.seed, phases)
-        final = np.maximum(micro, macro)
+        final = np.minimum(micro, macro_solid)
 
     if args.declutter and not args.envelope_only:
         solid = final >= 0
@@ -363,7 +415,8 @@ def main():
     title = None
     if args.annotate and "ratio" in raw.files and np.isfinite(float(raw["ratio"])):
         title = f"f/f0 = {float(raw['ratio']):.2f}"
-    render(mesh, out, nx, ny, nz, annotate=args.annotate, scalars=scal, title=title)
+    render(mesh, out, nx, ny, nz, annotate=args.annotate, scalars=scal, title=title,
+           presentation=args.presentation)
 
 
 if __name__ == "__main__":

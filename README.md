@@ -1,82 +1,91 @@
-# Spinodal-Pytopo3d
+# spinodal_pytopo3d
 
-Python reproduction of the 3D spinodal multiscale compliance-minimization
-cantilever from Senhora, Sanders, and Paulino, "Optimally-Tailored Spinodal
-Architected Materials for Multiscale Design and Manufacturing", Adv. Mater. 2022.
+CPU/GPU-capable Python reproduction of the **spinodal multiscale
+compliance-minimization cantilever** from Senhora, Sanders & Paulino,
+*Optimally-Tailored Spinodal Architected Materials for Multiscale Design and
+Manufacturing*, **Adv. Mater. 2022** (Fig. 5), built on the
+[PyTopo3D](PyTopo3D-main) finite-element backbone.
 
-This repository contains:
+This implementation intentionally starts with the paper's dominant cantilever
+case: a single **columnar** spinodal class. Each element optimizes:
 
-- A modular spinodal topology-optimization implementation in `spinodal_pytopo3d/`.
-- A vendored PyTopo3D backbone in `PyTopo3D-main/`.
-- The homogenized material coefficient table in `materials/coefficients_3d.mat`.
-- Saved result fields and rendered figures in `spinodal_pytopo3d/results/`.
+- macro presence `z` with density filtering, Heaviside projection, and SIMP;
+- spinodal solid fraction `Frac` in `[0.3, 0.7]` (not filtered);
+- orientation angles `(alpha, beta, gamma)`.
 
-## Result Gallery
+The element constitutive matrix is assembled from the homogenized material data:
 
-Final Fig. 5-style shell and truss renderings:
+```text
+D_e = E_SIMP(z_bar) * N(alpha,beta,gamma)^T * D^H_columnar(Frac) * N(alpha,beta,gamma)
+```
 
-![Shell spinodal final](spinodal_pytopo3d/results/fig5a_shell_final.png)
+Optimization uses homogenized stiffness tensors only. Explicit GRF spinodal
+pores are generated later for rendering/STL/slicing.
 
-![Truss spinodal final](spinodal_pytopo3d/results/fig5d_truss_final.png)
+## Results
 
-Orientation streamlines of the optimized columnar stiff axis:
+Fig. 5-style final renderings generated from the saved optimization fields. The
+gallery uses a dense presentation render (`m=1.5`, `n_waves=120`) because the
+paper's physical pore wavelength is visually too coarse on this reduced mesh.
 
-![Shell streamlines](spinodal_pytopo3d/results/fig5b_shell_streamlines.png)
+![shell final](spinodal_pytopo3d/results/fig5a_shell_final.png)
 
-![Truss streamlines](spinodal_pytopo3d/results/fig5e_truss_streamlines.png)
+![truss final](spinodal_pytopo3d/results/fig5d_truss_final.png)
 
-Density-colored truss microstructure and design views:
+Columnar stiff-axis streamlines:
 
-![Truss density](spinodal_pytopo3d/results/fig5d_truss_density.png)
+![shell streamlines](spinodal_pytopo3d/results/fig5b_shell_streamlines.png)
 
-![Shell design](spinodal_pytopo3d/results/cantilever_shell_fig5_design.png)
+![truss streamlines](spinodal_pytopo3d/results/fig5e_truss_streamlines.png)
 
-![Truss design](spinodal_pytopo3d/results/cantilever_truss_fig5_design.png)
+Density-colored truss and print-slice preview:
 
-Example print-slice preview:
+![truss density](spinodal_pytopo3d/results/fig5d_truss_density.png)
 
-![Slice montage](spinodal_pytopo3d/results/cantilever_truss_slices/_sample_montage.png)
+![slice montage](spinodal_pytopo3d/results/cantilever_truss_slices/_sample_montage.png)
 
-Large STL meshes are intentionally not committed because several generated files
-are above GitHub's 100 MB single-file limit. They can be regenerated from the
-saved `.npz` result files with `render_spinodal.py --save-stl`.
+Current Fig. 5-aligned saved fields use a consistent solid-isotropic baseline:
 
-## Numerical Summary
-
-The current Fig. 5-aligned run uses a consistent solid-isotropic baseline:
-
-| Case | Description | f/f0 |
+| case | density policy | f/f0 |
 | --- | --- | ---: |
-| shell | spinodal density fixed at rho=0.3 | 3.74 |
-| truss | spinodal density optimized in [0.3, 0.7] | 1.19 |
+| shell | `Frac = 0.3` fixed | 3.74 |
+| truss | `0.3 <= Frac <= 0.7` optimized | 1.19 |
 
-The qualitative Fig. 5 behavior, topology, and orientation field are reproduced.
-The exact paper-scale truss result requires a much finer mesh than is practical on
-the current workstation run.
+The shell/truss morphology and orientation-field behavior are reproduced. The
+paper's exact truss ratio below 1 depends on a much finer mesh than this laptop
+run; this repository keeps the single-columnar reproduction focused and does not
+yet implement the full four-material selection `Z_i` model.
 
 ## Setup
 
-On Windows PowerShell:
+From the repository root:
 
 ```powershell
 py -3.13 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install numpy scipy scikit-learn matplotlib trimesh scikit-image pyvista pypardiso
 ```
 
-Optional GPU solving uses CuPy and CUDA 12 packages. The CPU path is the default
-and is the validated route for the included checks.
+Optional GPU solve:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install cupy-cuda12x `
+  nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cusparse-cu12 nvidia-cusolver-cu12 `
+  nvidia-cuda-nvrtc-cu12 nvidia-nvjitlink-cu12 nvidia-cufft-cu12 nvidia-curand-cu12
+```
+
+Add `--use-gpu` to use warm-started CuPy CG + Jacobi. Assembly and
+sensitivities still run on CPU; the reduced linear solve moves to GPU.
 
 ## Run
 
-From the repository root:
+Default quick reproduction:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
     --nelx 32 --nely 16 --nelz 16 --volfrac 0.05 --rmin 1.5 --maxiter 300 --case both
 ```
 
-Faithful Fig. 5-style mode:
+Fig. 5-aligned mode:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
@@ -84,45 +93,65 @@ Faithful Fig. 5-style mode:
     --case both --fig5 --tag _fig5
 ```
 
-Export and rendering examples:
+`--fig5` switches to the concentrated tip load, `R=0.4 cm` filter scaling,
+`Emin=1e-4`, paper-style p-continuation, additive Heaviside beta continuation,
+and the SI-style orientation staggered update schedule.
+
+## Post-Processing
+
+Standalone export:
 
 ```powershell
-.\.venv\Scripts\python.exe -m spinodal_pytopo3d.export `
-    spinodal_pytopo3d/results/cantilever_truss_fig5.npz --vtk
-
-.\.venv\Scripts\python.exe -m spinodal_pytopo3d.render_spinodal `
-    spinodal_pytopo3d/results/cantilever_truss_fig5.npz --gamma 6 --save-stl
-
-.\.venv\Scripts\python.exe -m spinodal_pytopo3d.render_streamlines `
-    spinodal_pytopo3d/results/cantilever_truss_fig5.npz
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.export spinodal_pytopo3d/results/cantilever_truss_fig5.npz --vtk
 ```
+
+Embedded microstructure render:
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.render_spinodal `
+    spinodal_pytopo3d/results/cantilever_truss_64.npz --m 1.5 --samples-per-cell 8 --n-waves 120 `
+    --declutter --presentation
+```
+
+For physical Fig. 5 pore wavelength, use `--gamma 6 --element-mm 2`; on the
+current reduced mesh that looks much coarser and less continuous than the paper's
+much finer optimization grid.
+
+Print-slice preview:
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.slice_print `
+    spinodal_pytopo3d/results/cantilever_truss_fig5.npz --gamma 6 --element-mm 2 --sample 8
+```
+
+Manufacturing convention: `Frac` is the spinodal **solid** fraction. The GRF
+level set therefore uses `phi <= sqrt(2)*erfinv(2*Frac-1)`, so thresholded
+microstructure volume is approximately `Frac`.
 
 ## Modules
 
-| File | Role |
+| file | role |
 | --- | --- |
-| `fea_element.py` | H8 element B matrix and anisotropic per-element stiffness |
-| `spinodal_material.py` | homogenized spinodal material tensor and Voigt rotations |
-| `interpolation.py` | SIMP plus Heaviside macro interpolation |
-| `spinodal_fea.py` | assembly, solve, compliance, and analytic sensitivities |
-| `optimizer.py` | augmented-Lagrangian normalized-gradient optimizer |
-| `simp_baseline.py` | solid-isotropic SIMP baseline |
-| `run_cantilever.py` | main driver |
-| `visualize.py` | voxel and stiff-axis design figure |
-| `render_spinodal.py` | embedded spinodal microstructure rendering and STL export |
+| `fea_element.py` | H8 B-matrix and anisotropic per-element stiffness |
+| `spinodal_material.py` | `D^H(Frac)` polynomial, Voigt rotation, analytic derivatives |
+| `interpolation.py` | macro SIMP + Heaviside projection |
+| `spinodal_fea.py` | assembly, solve, compliance, and sensitivities |
+| `optimizer.py` | augmented-Lagrangian normalized-gradient update and angle sub-iterations |
+| `simp_baseline.py` | standalone solid-isotropic SIMP/OC baseline |
+| `run_cantilever.py` | driver and result serialization |
+| `render_spinodal.py` | embedded GRF microstructure rendering and STL export |
 | `render_streamlines.py` | stiff-axis streamline rendering |
-| `slice_print.py` | DLP/SLA-style binary slice generation |
+| `slice_print.py` | layer-wise binary slice generation |
 
-## Correctness Checks
+## Self-Tests
 
 ```powershell
 .\.venv\Scripts\python.exe spinodal_pytopo3d\fea_element.py
 .\.venv\Scripts\python.exe spinodal_pytopo3d\spinodal_material.py
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._fd_check
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d._micro_check
 ```
 
-Validated locally:
-
-- H8 element stiffness matches PyTopo3D `lk_H8`: max difference about `7e-17`.
-- Material and rotation derivatives match finite differences at about `1e-10`.
-- Full FEA sensitivity check passes with worst relative error about `1.3e-5`.
+Validated checks include H8 stiffness agreement with PyTopo3D `lk_H8`, material
+and rotation finite-difference checks, full FEA sensitivity finite differences,
+and the manufacturing level-set solid-fraction convention.

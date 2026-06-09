@@ -6,7 +6,7 @@ The full 3D microstructure at print resolution is billions of voxels, so we neve
 hold it in memory: each print layer is evaluated as a 2D binary image at the
 printer's XY pixel resolution.
 
-  cured(x, y) = inside_macro_envelope(x, y, z)  AND  phi(x, y, z) >= cutoff(rho_local)
+  cured(x, y) = inside_macro_envelope(x, y, z)  AND  phi(x, y, z) <= cutoff(rho_local)
 
 Because the pixel pitch is far below the pore size, the spinodal is well resolved
 and the binary slice is clean (unlike the under-sampled marching-cubes render).
@@ -101,7 +101,7 @@ def slice_layer(zc_elem, xpx, ypx, fields, nearest, base, kappa, n_waves, phases
             ang = pts @ vecs.T
             ang *= kappa; ang += phases[None, :]; np.cos(ang, out=ang)
             phi = ang.sum(1).astype(np.float32) * np.float32(np.sqrt(2.0 / n_waves))
-            micro[xs, ys] = (phi - cut).reshape((len(xg), len(yg)))
+            micro[xs, ys] = (cut - phi).reshape((len(xg), len(yg)))
     inside = _interp_inside(sdf, sdf_coords, xpx, ypx, zc_elem)
     cured = (micro >= 0) & inside
     if keep is not None:
@@ -172,10 +172,11 @@ def main():
         micro_c = build_spinodal_field(mask, fields["Frac"], fields["alpha"], fields["beta"],
                                        fields["gamma"], xcc, ycc, zcc, m_eff, args.n_waves,
                                        args.seed, phases)
-        keep, ncomp, nkept = keep_largest_component(np.maximum(micro_c, macro_c) >= 0, 26)
+        solid_c = np.minimum(micro_c, -macro_c) >= 0
+        keep, ncomp, nkept = keep_largest_component(solid_c, 26)
         keep_coords = (xcc, ycc, zcc)
         print(f"declutter (cleanup spc={spc_c}): {ncomp} components -> kept largest "
-              f"({int(keep.sum()):,}/{int((np.maximum(micro_c,macro_c)>=0).sum()):,} voxels). "
+              f"({int(keep.sum()):,}/{int(solid_c.sum()):,} voxels). "
               "NOTE: macro-scale floaters removed; sub-cleanup-resolution specks may remain.")
 
     outdir = Path(args.outdir or Path(args.npz).with_suffix(""))

@@ -132,6 +132,7 @@ class OptOptions:
     angle_subiters: int = 15
     angle_period: int = 20
     angle_phase_frac: float = 0.7       # run angle sub-iters for it < frac*max_iter
+    angle_phase_iter: Optional[int] = None
     verbose: bool = True
     log_every: int = 10
 
@@ -179,7 +180,8 @@ def optimize(fea: SpinodalFEA, opt: OptOptions):
         np.full(3 * nele, -np.pi), np.full(3 * nele, np.pi)
     )
     angle_mv = np.full(3 * nele, opt.move_angle)
-    angle_phase_end = int(opt.angle_phase_frac * opt.max_iter)
+    angle_phase_end = (int(opt.angle_phase_iter) if opt.angle_phase_iter is not None
+                       else int(opt.angle_phase_frac * opt.max_iter))
     p0 = opt.penal_steps[0] if opt.penal_steps else opt.penal
     params = SpinodalParams(penal=p0, beta=opt.beta0, eta=opt.eta, Emin=opt.Emin)
 
@@ -188,7 +190,7 @@ def optimize(fea: SpinodalFEA, opt: OptOptions):
     cont_thresh = np.cumsum(opt.penal_iters) if opt.penal_steps else np.array([])
     beta_start = int(cont_thresh[-1]) if opt.penal_steps else opt.beta_start_iter
 
-    hist = {"c": [], "vol": [], "g": [], "change": [], "beta": []}
+    hist = {"c": [], "vol": [], "g": [], "change": [], "beta": [], "penal": []}
     obj0 = None
     last = None
 
@@ -233,6 +235,7 @@ def optimize(fea: SpinodalFEA, opt: OptOptions):
         change = float(np.mean(np.abs(x_new - x_old)))
         hist["c"].append(c); hist["vol"].append(vol); hist["g"].append(g)
         hist["change"].append(change); hist["beta"].append(params.beta)
+        hist["penal"].append(params.penal)
         last = out
 
         if opt.verbose and (it % opt.log_every == 0 or it == opt.max_iter - 1):
