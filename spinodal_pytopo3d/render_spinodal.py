@@ -299,12 +299,14 @@ def render(mesh, out_png, nx, ny, nz, color="#4DB6AC", box=True, size=(2200, 150
         pl.add_mesh(pv.Box(bounds=(0, nx, 0, ny, 0, nz)).extract_all_edges(),
                     color="black", line_width=2)
     if annotate:
-        # load arrow at the free end (x=nx), pointing -z (magenta, like the paper)
-        alen = 0.45 * nz
-        pl.add_mesh(pv.Arrow(start=(nx, ny / 2, nz + alen), direction=(0, 0, -1),
+        # Concentrated load at the center of the free-end face (x=nx), pointing -x3.
+        alen = 0.55 * nz
+        load_point = (nx, ny / 2, nz / 2)
+        arrow_start = (load_point[0], load_point[1], load_point[2] + alen)
+        pl.add_mesh(pv.Arrow(start=arrow_start, direction=(0, 0, -1),
                              scale=alen, tip_length=0.3, shaft_radius=0.04,
                              tip_radius=0.09), color="magenta")
-        pl.add_point_labels([(nx, ny / 2, nz + alen)], ["Load"], font_size=26,
+        pl.add_point_labels([arrow_start], ["Load"], font_size=26,
                             text_color="magenta", shape=None, show_points=False)
         if not presentation:
             pl.add_axes(xlabel="x1", ylabel="x2", zlabel="x3", line_width=3)
