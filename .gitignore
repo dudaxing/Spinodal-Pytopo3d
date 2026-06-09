@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Heavy generated meshes. GitHub rejects files over 100 MB and these can be
+# regenerated from the saved optimization fields.
+spinodal_pytopo3d/results/*.stl
+spinodal_pytopo3d/results/*.ply
+
+# Local viewer/export scratch files.
+*.log
+*.tmp

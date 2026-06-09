@@ -1,0 +1,24 @@
+name: pytopo3d
+channels:
+  - defaults
+  - conda-forge
+  - nvidia
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - matplotlib
+  - scipy
+  - scikit-image
+  - jupyter
+  - jupyterlab
+  - networkx
+  - pillow
+  - plotly
+  - tqdm
+  - pip
+  - pip:
+    - trimesh
+    - pypardiso
+    - psutil
+    - cupy-cuda12x
