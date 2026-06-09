@@ -24,6 +24,7 @@ from spinodal_pytopo3d import spinodal_material as sm
 from spinodal_pytopo3d.export import _to_3d
 from spinodal_pytopo3d.render_spinodal import (
     build_smooth_macro_field,
+    _crop_png_whitespace,
     field_to_mesh,
     make_axis_coords,
     to_field_yxz,
@@ -59,6 +60,8 @@ def main():
     p.add_argument("--tube", type=float, default=0.22, help="tube radius (elements)")
     p.add_argument("--color", default=None, help="single streamline color (else by density)")
     p.add_argument("--no-body", action="store_true", help="don't draw the faint body")
+    p.add_argument("--presentation", action="store_true",
+                   help="paper-style view: no axes, tighter zoom, cropped whitespace")
     p.add_argument("--interactive", action="store_true")
     args = p.parse_args()
 
@@ -109,7 +112,10 @@ def main():
 
     # ---- render (side x1-x3 view, like Fig 5b/5e) ----
     pv.OFF_SCREEN = not args.interactive
-    win = [1400, 900] if args.interactive else [2000, 1300]
+    if args.interactive:
+        win = [1400, 900]
+    else:
+        win = [2800, 950] if args.presentation else [2000, 1300]
     pl = pv.Plotter(off_screen=not args.interactive, window_size=win)
     pl.set_background("white")
 
@@ -135,10 +141,11 @@ def main():
                                          vertical=True, position_x=0.88, height=0.5))
     pl.add_mesh(pv.Box(bounds=(0, nx, 0, ny, 0, nz)).extract_all_edges(),
                 color="black", line_width=2)
-    pl.add_axes(xlabel="x1", ylabel="x2", zlabel="x3", line_width=3)
+    if not args.presentation:
+        pl.add_axes(xlabel="x1", ylabel="x2", zlabel="x3", line_width=3)
     # side view: look along -x2, x1 horizontal, x3 up
     pl.camera_position = [(nx / 2, -3.0 * ny, nz / 2), (nx / 2, ny / 2, nz / 2), (0, 0, 1)]
-    pl.camera.zoom(1.3)
+    pl.camera.zoom(1.05 if args.presentation else 1.3)
     if not args.interactive:                      # SSAA framebuffer fails on-screen here
         try:
             pl.enable_anti_aliasing("ssaa")
@@ -152,6 +159,8 @@ def main():
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         pl.screenshot(str(out))
         pl.close()
+        if args.presentation:
+            _crop_png_whitespace(out)
         print(f"saved {out}")
 
 
