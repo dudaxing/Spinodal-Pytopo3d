@@ -25,24 +25,39 @@ import numpy as np
 # 2-point Gauss rule (weights = 1)
 _GP = np.array([-1.0, 1.0]) / np.sqrt(3.0)
 
-# Local node natural coordinates (xi, eta, zeta) matching Liu & Tovar's lk_H8
-# (the standard isoparametric H8 order: counter-clockwise bottom face z=-1, then
-# top face z=+1). Verified against lk_H8 by `validate()` (exact match to 1e-12).
-# Physical (x,y,z) corners with x<->xi, y<->eta, z<->zeta:
-#   n0:(0,0,0) n1:(1,0,0) n2:(1,1,0) n3:(0,1,0)  (bottom)
-#   n4:(0,0,1) n5:(1,0,1) n6:(1,1,1) n7:(0,1,1)  (top)
+# Local node natural coordinates (xi, eta, zeta) matching PyTopo3D's
+# `build_edof` local node ring (assembly.py: n0:(ix=0,iy=0) n1:(iy=1)
+# n2:(ix=1,iy=1) n3:(ix=1) then the same +z) -- i.e. the bottom ring walks +y
+# first, NOT the textbook +x-first isoparametric order.
+#
+# IMPORTANT: PyTopo3D's own `lk_H8` matrix is in the x-first textbook order, so
+# lk_H8 and build_edof are mutually INCONSISTENT in PyTopo3D itself. Assembling
+# either element matrix with the *other* convention's edof silently breaks the
+# physics (a node permutation without the matching ux<->uy component swap is not
+# a symmetry): a 12x4x4 solid bar under uniform axial tension comes out ~37x too
+# compliant, and the columnar stiff/soft Young's ratio collapses from ~11.5 to
+# ~1.1. With the y-first order below + build_edof, the same bar matches the
+# analytic compliance to ~2% and reproduces E3/E1 = 11.5. See _bar_check.py.
+#
+# Physical (x,y,z) corners (0/1 per axis) in element-local order:
+#   n0:(0,0,0) n1:(0,1,0) n2:(1,1,0) n3:(1,0,0)  (bottom, +y first)
+#   n4:(0,0,1) n5:(0,1,1) n6:(1,1,1) n7:(1,0,1)  (top)
 _NAT = np.array(
     [
         [-1.0, -1.0, -1.0],  # n0
-        [ 1.0, -1.0, -1.0],  # n1
+        [-1.0,  1.0, -1.0],  # n1
         [ 1.0,  1.0, -1.0],  # n2
-        [-1.0,  1.0, -1.0],  # n3
+        [ 1.0, -1.0, -1.0],  # n3
         [-1.0, -1.0,  1.0],  # n4
-        [ 1.0, -1.0,  1.0],  # n5
+        [-1.0,  1.0,  1.0],  # n5
         [ 1.0,  1.0,  1.0],  # n6
-        [-1.0,  1.0,  1.0],  # n7
+        [ 1.0, -1.0,  1.0],  # n7
     ]
 )
+
+# Permutation taking our (y-first) node order to lk_H8's (x-first) order:
+# x-first node k corresponds to y-first node _TO_XFIRST[k].
+_TO_XFIRST = np.array([0, 3, 2, 1, 4, 7, 6, 5])
 
 
 def _shape_grad_natural(xi: float, eta: float, zeta: float) -> np.ndarray:
@@ -116,7 +131,14 @@ def element_KE_batch(D_all: np.ndarray, B_int: np.ndarray) -> np.ndarray:
 
 def validate(nu: float = 0.3, tol: float = 1e-9) -> float:
     """
-    Correctness gate: our hand-built isotropic KE must equal PyTopo3D's lk_H8(nu).
+    Correctness gate: our isotropic KE, re-permuted into lk_H8's x-first node
+    order, must equal PyTopo3D's lk_H8(nu).
+
+    The permutation is required because lk_H8 uses the textbook x-first node
+    ring while build_edof (and therefore this module) walks +y first; comparing
+    raw matrices across the two conventions is NOT valid (and silently passes
+    only for the isotropic-matrix coincidence it happens to break). The real
+    end-to-end gate is the assembled bar test in `_bar_check.py`.
 
     Returns the max abs difference and raises AssertionError if it exceeds `tol`.
     Requires PyTopo3D-main to be importable (the caller adds it to sys.path).
@@ -125,11 +147,13 @@ def validate(nu: float = 0.3, tol: float = 1e-9) -> float:
 
     B_int = element_B_integrated(1.0)
     KE_ours = element_KE(isotropic_D(1.0, nu), B_int)
+    dof_perm = (3 * _TO_XFIRST[:, None] + np.arange(3)).ravel()
+    KE_xfirst = KE_ours[np.ix_(dof_perm, dof_perm)]
     KE_ref = lk_H8(nu)
-    diff = float(np.max(np.abs(KE_ours - KE_ref)))
+    diff = float(np.max(np.abs(KE_xfirst - KE_ref)))
     assert diff < tol, (
-        f"KE mismatch vs lk_H8: max|diff|={diff:.3e} (tol={tol:.1e}). "
-        "Node ordering / Voigt convention is inconsistent with PyTopo3D."
+        f"KE mismatch vs lk_H8 (after node-order permutation): "
+        f"max|diff|={diff:.3e} (tol={tol:.1e})."
     )
     return diff
 
