@@ -24,17 +24,30 @@ pores are generated later for rendering/STL/slicing.
 
 ## Results
 
-> **Update (2026-06-10): rotation bug fixed; results below are being
-> recomputed.** A new self-test (`_rot_check.py`, cross-validating the 6x6
-> Bond/Voigt rotation against a 4th-order-tensor `np.einsum` rotation) caught
-> two defects inherited from the released TO_Spinodal rotation matrix: three
-> shear-row entries missing a factor 2 (breaking isotropy invariance by up to
-> 28 % at oblique angles), and an orientation convention that effectively
-> rotated by `U^T`, placing the stiff axis at `U[2,:]` while the orientation
-> field was interpreted as `U[:,2]`. Both are corrected in
-> `spinodal_material.py` (axis-aligned angles, including the solid baseline
-> `f0`, are unaffected). The figures and the `f/f0` table below were produced
-> under the pre-fix model and will be replaced by the corrected re-run.
+> **Update 2 (2026-06-10, evening): node-ordering bug found in assembly —
+> all numerical results below are invalid and being recomputed.** A new
+> end-to-end gate (`_bar_check.py`: assembled solid bar vs analytic compliance)
+> exposed that PyTopo3D's `lk_H8` element matrix (textbook x-first node ring)
+> is inconsistent with PyTopo3D's own `build_edof` (y-first node ring). Our
+> element matrices had been built in the lk_H8 order and assembled with the
+> build_edof wiring, which silently scrambles the physics: an isotropic bar
+> came out ~37x too compliant and the columnar Young's anisotropy collapsed
+> from 11.5x to ~1.1x. Element-level gates (KE==lk_H8, FD sensitivities,
+> einsum rotation) are all blind to this mismatch. `fea_element._NAT` now
+> follows the build_edof ring (validated by `_bar_check`), and `validate()`
+> compares against `lk_H8` after the node permutation. Topology *shapes* below
+> remain qualitatively meaningful (compliance optimization under a consistent,
+> if wrong, SPD model), but every compliance number, `f/f0` ratio, and
+> orientation field predates this fix.
+>
+> **Update 1 (2026-06-10): rotation bug fixed.** A self-test (`_rot_check.py`,
+> cross-validating the 6x6 Bond/Voigt rotation against a 4th-order-tensor
+> `np.einsum` rotation) caught two defects inherited from the released
+> TO_Spinodal rotation matrix: three shear-row entries missing a factor 2
+> (breaking isotropy invariance by up to 28 % at oblique angles), and an
+> orientation convention that effectively rotated by `U^T`, placing the stiff
+> axis at `U[2,:]` while the orientation field was interpreted as `U[:,2]`.
+> Both are corrected in `spinodal_material.py`.
 
 Fig. 5-style final renderings generated from the saved optimization fields. The
 gallery uses a dense presentation render (`m=1.5`, `n_waves=120`) because the
@@ -199,6 +212,7 @@ microstructure volume is approximately `Frac`.
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._fd_check
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._micro_check
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._rot_check
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d._bar_check
 ```
 
 Validated checks include H8 stiffness agreement with PyTopo3D `lk_H8`, material
