@@ -24,62 +24,57 @@ pores are generated later for rendering/STL/slicing.
 
 ## Results
 
-> **Update 2 (2026-06-10, evening): node-ordering bug found in assembly —
-> all numerical results below are invalid and being recomputed.** A new
-> end-to-end gate (`_bar_check.py`: assembled solid bar vs analytic compliance)
-> exposed that PyTopo3D's `lk_H8` element matrix (textbook x-first node ring)
-> is inconsistent with PyTopo3D's own `build_edof` (y-first node ring). Our
-> element matrices had been built in the lk_H8 order and assembled with the
-> build_edof wiring, which silently scrambles the physics: an isotropic bar
-> came out ~37x too compliant and the columnar Young's anisotropy collapsed
-> from 11.5x to ~1.1x. Element-level gates (KE==lk_H8, FD sensitivities,
-> einsum rotation) are all blind to this mismatch. `fea_element._NAT` now
-> follows the build_edof ring (validated by `_bar_check`), and `validate()`
-> compares against `lk_H8` after the node permutation. Topology *shapes* below
-> remain qualitatively meaningful (compliance optimization under a consistent,
-> if wrong, SPD model), but every compliance number, `f/f0` ratio, and
-> orientation field predates this fix.
->
-> **Update 1 (2026-06-10): rotation bug fixed.** A self-test (`_rot_check.py`,
-> cross-validating the 6x6 Bond/Voigt rotation against a 4th-order-tensor
-> `np.einsum` rotation) caught two defects inherited from the released
-> TO_Spinodal rotation matrix: three shear-row entries missing a factor 2
-> (breaking isotropy invariance by up to 28 % at oblique angles), and an
-> orientation convention that effectively rotated by `U^T`, placing the stiff
-> axis at `U[2,:]` while the orientation field was interpreted as `U[:,2]`.
-> Both are corrected in `spinodal_material.py`.
+> **Verification history (2026-06-10).** Three silent physics bugs were found
+> and fixed by adding independent-reference self-tests; the gallery below is
+> fully recomputed under the corrected model (`_fig5v3` fields):
+> 1. Bond/Voigt rotation: three shear-row entries missing a factor 2, and an
+>    effective `U^T` rotation that put the stiff axis at `U[2,:]` while
+>    orientation was interpreted as `U[:,2]` (both inherited from the released
+>    TO_Spinodal code; caught by `_rot_check.py`, an `np.einsum` 4th-order
+>    tensor rotation cross-check).
+> 2. Element/edof node ordering: PyTopo3D's `lk_H8` uses the textbook x-first
+>    local node ring while PyTopo3D's own `build_edof` wires y-first; mixing
+>    them scrambles assembled physics (isotropic bar ~37x too compliant,
+>    columnar Young's anisotropy 11.5x collapsed to ~1.1x). Caught by
+>    `_bar_check.py` (assembled bar vs analytic compliance), which element-level
+>    and self-consistent FD tests provably cannot catch.
 
-Fig. 5-style final renderings generated from the saved optimization fields. The
+Fig. 5-style final renderings generated from the corrected saved fields. The
 gallery uses a dense presentation render (`m=1.5`, `n_waves=120`) because the
 paper's physical pore wavelength is visually too coarse on this reduced mesh.
 
-![shell final](spinodal_pytopo3d/results/fig5a_shell_final.png)
+![shell final](spinodal_pytopo3d/results/fig5a_shell_v3.png)
 
-![truss final](spinodal_pytopo3d/results/fig5d_truss_final.png)
+![truss final](spinodal_pytopo3d/results/fig5d_truss_v3.png)
 
-Columnar stiff-axis streamlines:
+Columnar stiff-axis streamlines (cf. paper Fig. 5b/5e: principal-stress arcs):
 
-![shell streamlines](spinodal_pytopo3d/results/fig5b_shell_streamlines.png)
+![shell streamlines](spinodal_pytopo3d/results/fig5b_shell_v3_streamlines.png)
 
-![truss streamlines](spinodal_pytopo3d/results/fig5e_truss_streamlines.png)
+![truss streamlines](spinodal_pytopo3d/results/fig5e_truss_v3_streamlines.png)
 
 Density-colored truss and print-slice preview:
 
-![truss density](spinodal_pytopo3d/results/fig5d_truss_density.png)
+![truss density](spinodal_pytopo3d/results/fig5d_truss_v3_density.png)
 
-![slice montage](spinodal_pytopo3d/results/cantilever_truss_slices/_sample_montage.png)
+![slice montage](spinodal_pytopo3d/results/cantilever_truss_fig5v3_slices/_sample_montage.png)
 
-Current Fig. 5-aligned saved fields use a consistent solid-isotropic baseline:
+Results with the consistent solid-isotropic baseline (same optimizer, same
+nodal tip load; `f0 = 100.13` on the 72x24x24 mesh):
 
-| case | density policy | f/f0 |
-| --- | --- | ---: |
-| shell | `Frac = 0.3` fixed | 3.74 |
-| truss | `0.3 <= Frac <= 0.7` optimized | 1.19 |
+| case | density policy | f/f0 (ours) | f/f0 (paper) |
+| --- | --- | ---: | ---: |
+| shell | `Frac = 0.3` fixed | **2.90** | 2.99 |
+| truss | `0.3 <= Frac <= 0.7` optimized | **0.92** | 0.86 |
 
-The shell/truss morphology and orientation-field behavior are reproduced. The
-paper's exact truss ratio below 1 depends on a much finer mesh than this laptop
-run; this repository keeps the single-columnar reproduction focused and does not
-yet implement the full four-material selection `Z_i` model.
+Both headline results of the paper are reproduced: the fixed-porosity shell
+trades stiffness for porosity (`f/f0 > 1`), and the variable-density truss
+*outperforms* the standard solid solution (`f/f0 < 1`). The truss spinodal
+density is bounds-seeking as the paper reports (S4.3): 37% of elements at
+`Frac >= 0.65` (paper: >60%) and 19% at `Frac <= 0.35` (paper: <20%); the
+remaining gap tracks the 16x coarser mesh (72x24x24 full domain here vs
+180x60x60 with half-domain symmetry in the paper) and the single-columnar
+simplification (no four-material `Z_i` selection).
 
 ## Connectivity & cleanliness
 
