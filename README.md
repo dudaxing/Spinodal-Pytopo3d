@@ -44,12 +44,12 @@ Density-colored truss and print-slice preview:
 
 ![slice montage](spinodal_pytopo3d/results/cantilever_truss_slices/_sample_montage.png)
 
-Current Fig. 5-aligned saved fields use a consistent solid-isotropic baseline:
+Current saved fields shown in the gallery:
 
-| case | density policy | f/f0 |
-| --- | --- | ---: |
-| shell | `Frac = 0.3` fixed | 3.74 |
-| truss | `0.3 <= Frac <= 0.7` optimized | 1.19 |
+| case | saved field | density policy | load setting |
+| --- | --- | --- | --- |
+| shell | `cantilever_shell_fig5.npz` | `Frac = 0.3` fixed | Fig. 5 tip load |
+| truss | `cantilever_truss_point48_pad.npz` | `0.3 <= Frac <= 0.7` optimized | right-end center nodal load + passive load pad |
 
 The shell/truss morphology and orientation-field behavior are reproduced. The
 paper's exact truss ratio below 1 depends on a much finer mesh than this laptop
@@ -128,6 +128,18 @@ Fig. 5-aligned mode:
 `Emin=1e-4`, paper-style p-continuation, additive Heaviside beta continuation,
 and the SI-style orientation staggered update schedule.
 
+For the truss gallery image, the load is applied directly at the center node of
+the free-end face and a small passive connection pad is pinned around that node:
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 48 --nely 16 --nelz 16 --volfrac 0.05 --maxiter 550 `
+    --case truss --fig5 --tag _point48_pad --no-baseline --load-pad-radius 2.0
+```
+
+The resulting `.npz` stores `load_info = [[48, 8, 8, 2, -1]]`, meaning a single
+`-x3` force at `(x1=L, x2=center, x3=center)`.
+
 ## Post-Processing
 
 Standalone export:
@@ -140,7 +152,7 @@ Embedded microstructure render:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d.render_spinodal `
-    spinodal_pytopo3d/results/cantilever_truss_64.npz --m 1.5 --samples-per-cell 8 --n-waves 120 `
+    spinodal_pytopo3d/results/cantilever_truss_point48_pad.npz --m 1.5 --samples-per-cell 8 --n-waves 120 `
     --declutter --presentation
 ```
 

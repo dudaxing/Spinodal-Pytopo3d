@@ -133,6 +133,8 @@ class OptOptions:
     angle_period: int = 20
     angle_phase_frac: float = 0.7       # run angle sub-iters for it < frac*max_iter
     angle_phase_iter: Optional[int] = None
+    passive_z: Optional[np.ndarray] = None
+    passive_frac_value: Optional[float] = None
     verbose: bool = True
     log_every: int = 10
 
@@ -165,15 +167,35 @@ def optimize(fea: SpinodalFEA, opt: OptOptions):
     z = np.full(nele, min(opt.volfrac / max(frac0, 1e-9), 1.0))
     Frac = np.full(nele, frac0)
     alpha = np.zeros(nele); beta = np.zeros(nele); gamma = np.zeros(nele)
+    passive_z = np.zeros(nele, dtype=bool)
+    if opt.passive_z is not None:
+        passive_z = np.asarray(opt.passive_z, dtype=bool).ravel()
+        if passive_z.size != nele:
+            raise ValueError(f"passive_z has {passive_z.size} entries, expected {nele}")
+        z[passive_z] = 1.0
+        if opt.passive_frac_value is not None:
+            Frac[passive_z] = float(np.clip(opt.passive_frac_value, opt.rho_min, opt.rho_max))
 
     # --- bounds & move vector (order: z, Frac, a, b, g) ---
-    lower = np.concatenate([np.zeros(nele), np.full(nele, opt.rho_min),
-                            np.full(3 * nele, -np.pi)])
-    upper = np.concatenate([np.ones(nele), np.full(nele, opt.rho_max),
-                            np.full(3 * nele, np.pi)])
+    z_lower = np.zeros(nele); z_upper = np.ones(nele)
+    frac_lower = np.full(nele, opt.rho_min); frac_upper = np.full(nele, opt.rho_max)
+    if passive_z.any():
+        z_lower[passive_z] = 1.0
+        z_upper[passive_z] = 1.0
+        if opt.passive_frac_value is not None:
+            frac_value = float(np.clip(opt.passive_frac_value, opt.rho_min, opt.rho_max))
+            frac_lower[passive_z] = frac_value
+            frac_upper[passive_z] = frac_value
+    lower = np.concatenate([z_lower, frac_lower, np.full(3 * nele, -np.pi)])
+    upper = np.concatenate([z_upper, frac_upper, np.full(3 * nele, np.pi)])
     mv_frac = opt.move_frac if opt.optimize_density else 0.0
-    move_vector = np.concatenate([np.full(nele, opt.move_z), np.full(nele, mv_frac),
-                                  np.full(3 * nele, opt.move_angle)])
+    move_z = np.full(nele, opt.move_z)
+    move_frac = np.full(nele, mv_frac)
+    if passive_z.any():
+        move_z[passive_z] = 0.0
+        if opt.passive_frac_value is not None:
+            move_frac[passive_z] = 0.0
+    move_vector = np.concatenate([move_z, move_frac, np.full(3 * nele, opt.move_angle)])
 
     updater = ALGradientUpdater(lower, upper)
     angle_updater = ALGradientUpdater(

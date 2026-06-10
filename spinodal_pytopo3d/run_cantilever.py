@@ -33,13 +33,56 @@ from spinodal_pytopo3d.optimizer import OptOptions, optimize
 RESULTS = os.path.join(os.path.dirname(__file__), "results")
 
 
+def node_id0(ix, iy, iz, nelx, nely, nelz):
+    """0-based node id for PyTopo3D's Fortran-order node numbering."""
+    if not (0 <= ix <= nelx and 0 <= iy <= nely and 0 <= iz <= nelz):
+        raise ValueError(f"node ({ix}, {iy}, {iz}) outside grid {nelx}x{nely}x{nelz}")
+    return iy + ix * (nely + 1) + iz * (nelx + 1) * (nely + 1)
+
+
 def tip_load_force(nelx, nely, nelz, ndof):
-    """Concentrated -x3 load at the CENTER of the free-end face (x1=L, depth-center,
-    height-center) -- matches Fig. 5a's Load arrow at the right-end center. Applied
-    on one element so it is local."""
-    ff = np.zeros((nely, nelx, nelz, 3))
-    ff[nely // 2, nelx - 1, nelz // 2, 2] = -1.0
-    return build_force_vector(nelx, nely, nelz, ndof, force_field=ff)
+    """Concentrated -x3 nodal load at the center of the free-end face.
+
+    The earlier implementation used a force_field entry on the last element and
+    PyTopo3D distributed it to that element's eight corner nodes. Fig. 5's load
+    is a point load on the right face center, so apply it directly to the node
+    (x=nelx, y=nely/2, z=nelz/2).
+    """
+    F = np.zeros(ndof)
+    ix, iy, iz = nelx, nely // 2, nelz // 2
+    nid = node_id0(ix, iy, iz, nelx, nely, nelz)
+    F[3 * nid + 2] = -1.0
+    return F
+
+
+def load_summary(F, nelx, nely, nelz):
+    """Return loaded nodal coordinates and force components for diagnostics."""
+    out = []
+    for dof in np.flatnonzero(np.abs(F) > 0):
+        nid, comp = divmod(int(dof), 3)
+        plane = (nelx + 1) * (nely + 1)
+        iz = nid // plane
+        rem = nid - iz * plane
+        ix = rem // (nely + 1)
+        iy = rem - ix * (nely + 1)
+        out.append((ix, iy, iz, comp, float(F[dof])))
+    return out
+
+
+def make_load_pad_mask(nelx, nely, nelz, radius):
+    """Element mask for a small passive pad around the free-end center load node."""
+    mask = np.zeros(nelx * nely * nelz, dtype=bool)
+    if radius <= 0:
+        return mask
+    cx, cy, cz = float(nelx), float(nely) / 2.0, float(nelz) / 2.0
+    r2 = float(radius) ** 2
+    for elz in range(nelz):
+        for elx in range(nelx):
+            for ely in range(nely):
+                x, y, z = elx + 0.5, ely + 0.5, elz + 0.5
+                if (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2 <= r2:
+                    mask[ely + elx * nely + elz * nelx * nely] = True
+    return mask
 
 
 def run(args):
@@ -56,7 +99,17 @@ def run(args):
 
     F = (tip_load_force(nelx, nely, nelz, ndof) if args.load == "tip"
          else build_force_vector(nelx, nely, nelz, ndof))
-    freedofs0, _ = build_supports(nelx, nely, nelz, ndof)
+    load_info = load_summary(F, nelx, nely, nelz)
+    print(f"[load] nonzero nodal loads: {load_info}")
+    freedofs0, fixeddof0 = build_supports(nelx, nely, nelz, ndof)
+    print(f"[support] fixed left-face DOFs: {fixeddof0.size} "
+          f"({fixeddof0.size // 3} nodes)")
+    passive_z = make_load_pad_mask(nelx, nely, nelz, args.load_pad_radius)
+    passive_frac_value = args.load_pad_frac if passive_z.any() else None
+    if passive_z.any():
+        pad_vol = passive_z.sum() * passive_frac_value / (nelx * nely * nelz)
+        print(f"[load-pad] passive elements={int(passive_z.sum())}, radius={args.load_pad_radius:g}, "
+              f"Frac={passive_frac_value:g}, minimum volume contribution={pad_vol:.5f}")
     H, Hs = build_filter(nelx, nely, nelz, rmin)
 
     fea = SpinodalFEA(nelx, nely, nelz, F, freedofs0, H, Hs,
@@ -78,6 +131,7 @@ def run(args):
             move_z=0.05, move_frac=0.0, move_angle=0.0, Emin=Emin, angle_subiters=0,
             penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
             beta0=0.1, beta_add=0.5, beta_period=15, beta_max=25.0,
+            passive_z=passive_z, passive_frac_value=1.0 if passive_z.any() else None,
             max_iter=args.maxiter, verbose=False,
         )
         f0 = optimize(fea, opt0)["c"]
@@ -101,6 +155,7 @@ def run(args):
                 penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
                 beta0=0.1, beta_add=0.5, beta_period=15, beta_max=25.0,
                 angle_subiters=30, angle_period=25, angle_phase_iter=150,
+                passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
             )
         else:
@@ -108,6 +163,7 @@ def run(args):
                 volfrac=args.volfrac, penal=args.penal,
                 rho_min=0.3, rho_max=0.7,
                 optimize_density=(case == "truss"),
+                passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
                 beta_start_iter=min(150, args.maxiter // 3),
             )
@@ -138,6 +194,11 @@ def run(args):
             frac_p10=frac_summary["p10"], frac_p50=frac_summary["p50"],
             frac_p90=frac_summary["p90"], frac_hi065=frac_summary["hi065"],
             frac_lo035=frac_summary["lo035"],
+            load_info=np.array(load_info, dtype=float),
+            fixed_dof_count=int(fixeddof0.size),
+            passive_z=passive_z.astype(np.uint8),
+            load_pad_radius=float(args.load_pad_radius),
+            load_pad_frac=float(passive_frac_value) if passive_frac_value is not None else np.nan,
             nelx=nelx, nely=nely, nelz=nelz, volfrac=args.volfrac,
         )
         _save_plots(res, label, f0)
@@ -218,7 +279,11 @@ def build_argparser():
     p.add_argument("--case", choices=["shell", "truss", "both"], default="both")
     p.add_argument("--tag", default="", help="suffix for output names (e.g. _64 to avoid overwrite)")
     p.add_argument("--load", choices=["edge", "tip"], default="edge",
-                   help="edge=distributed free-end edge (default); tip=concentrated free-end load")
+                   help="edge=distributed free-end edge (default); tip=nodal point load at free-end center")
+    p.add_argument("--load-pad-radius", type=float, default=0.0,
+                   help="passive macro pad radius around the free-end center load node, in elements")
+    p.add_argument("--load-pad-frac", type=float, default=0.7,
+                   help="spinodal solid fraction pinned inside the passive load pad")
     p.add_argument("--fig5", action="store_true",
                    help="faithful Adv.Mater.2022 Fig.5 setup (tip load, R=0.4cm, paper "
                         "p-continuation, additive beta->25, Ersatz 1e-4)")
