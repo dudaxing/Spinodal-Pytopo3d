@@ -24,17 +24,11 @@ pores are generated later for rendering/STL/slicing.
 
 ## Results
 
-> **Update (2026-06-10): rotation bug fixed; results below are being
-> recomputed.** A new self-test (`_rot_check.py`, cross-validating the 6x6
-> Bond/Voigt rotation against a 4th-order-tensor `np.einsum` rotation) caught
-> two defects inherited from the released TO_Spinodal rotation matrix: three
-> shear-row entries missing a factor 2 (breaking isotropy invariance by up to
-> 28 % at oblique angles), and an orientation convention that effectively
-> rotated by `U^T`, placing the stiff axis at `U[2,:]` while the orientation
-> field was interpreted as `U[:,2]`. Both are corrected in
-> `spinodal_material.py` (axis-aligned angles, including the solid baseline
-> `f0`, are unaffected). The figures and the `f/f0` table below were produced
-> under the pre-fix model and will be replaced by the corrected re-run.
+> **Update (2026-06-10):** the gallery below was recomputed with the corrected
+> Voigt/Bond rotation, the manufacturing level-set sign convention
+> `phi <= cutoff(Frac)`, and a true nodal load at the center of the free-end
+> face. The truss case uses a small passive load pad around that node so the
+> point load remains connected during topology optimization.
 
 Fig. 5-style final renderings generated from the saved optimization fields. The
 gallery uses a dense presentation render (`m=1.5`, `n_waves=120`) because the
@@ -58,15 +52,18 @@ Density-colored truss and print-slice preview:
 
 Current saved fields shown in the gallery:
 
-| case | saved field | density policy | load setting |
-| --- | --- | --- | --- |
-| shell | `cantilever_shell_fig5.npz` | `Frac = 0.3` fixed | Fig. 5 tip load |
-| truss | `cantilever_truss_point48_pad.npz` | `0.3 <= Frac <= 0.7` optimized | right-end center nodal load + passive load pad |
+| case | saved field | density policy | f/f0 | load setting |
+| --- | --- | --- | ---: | --- |
+| shell | `cantilever_shell_point48_b1.npz` | `Frac = 0.3` fixed | 3.68 | centered free-end nodal load |
+| truss | `cantilever_truss_point48_pad_b1.npz` | `0.3 <= Frac <= 0.7` optimized | 1.11 | centered free-end nodal load + passive load pad |
 
-The shell/truss morphology and orientation-field behavior are reproduced. The
-paper's exact truss ratio below 1 depends on a much finer mesh than this laptop
-run; this repository keeps the single-columnar reproduction focused and does not
-yet implement the full four-material selection `Z_i` model.
+The qualitative shell/truss morphology and orientation-field behavior are
+reproduced, but this reduced single-columnar run is not an exact numerical
+match to the paper values (`2.99` for Fig. 5a and `0.86` for Fig. 5d). The main
+remaining differences are the much coarser mesh, no four-material `Z_i`
+selection, and a density distribution that still under-uses the upper
+spinodal-density bound: the current truss has `Frac >= 0.65` in 19.4% of
+elements, whereas the paper reports over 60%.
 
 ## Connectivity & cleanliness
 
@@ -145,31 +142,43 @@ Fig. 5-aligned mode:
 `Emin=1e-4`, paper-style p-continuation, additive Heaviside beta continuation,
 and the SI-style orientation staggered update schedule.
 
-For the truss gallery image, the load is applied directly at the center node of
-the free-end face and a small passive connection pad is pinned around that node:
+The SI also solves the cantilever on a half-width domain with a symmetry plane
+parallel to `x1-x3`. This is available with:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
-    --nelx 48 --nely 16 --nelz 16 --volfrac 0.05 --maxiter 550 `
-    --case truss --fig5 --tag _point48_pad --no-baseline --load-pad-radius 2.0
+    --nelx 72 --nely 12 --nelz 24 --volfrac 0.05 --maxiter 700 `
+    --case truss --fig5 --tag _fig5_halfy_pad --symmetry half-y --load-pad-radius 2.0
 ```
 
-The resulting `.npz` stores `load_info = [[48, 8, 8, 2, -1]]`, meaning a single
-`-x3` force at `(x1=L, x2=center, x3=center)`.
+For the gallery images, the current laptop-sized rerun uses `48x16x16`:
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 48 --nely 16 --nelz 16 --volfrac 0.05 --maxiter 700 `
+    --case shell --fig5 --tag _point48_b1
+
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 48 --nely 16 --nelz 16 --volfrac 0.05 --maxiter 700 `
+    --case truss --fig5 --tag _point48_pad_b1 --load-pad-radius 2.0
+```
+
+The resulting `.npz` files store `load_info = [[48, 8, 8, 2, -1]]`, meaning a
+single `-x3` force at `(x1=L, x2=center, x3=center)`.
 
 ## Post-Processing
 
 Standalone export:
 
 ```powershell
-.\.venv\Scripts\python.exe -m spinodal_pytopo3d.export spinodal_pytopo3d/results/cantilever_truss_fig5.npz --vtk
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.export spinodal_pytopo3d/results/cantilever_truss_point48_pad_b1.npz --vtk
 ```
 
 Embedded microstructure render:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d.render_spinodal `
-    spinodal_pytopo3d/results/cantilever_truss_point48_pad.npz --m 1.5 --samples-per-cell 8 --n-waves 120 `
+    spinodal_pytopo3d/results/cantilever_truss_point48_pad_b1.npz --m 1.5 --samples-per-cell 8 --n-waves 120 `
     --declutter --presentation
 ```
 
@@ -181,7 +190,7 @@ Print-slice preview:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d.slice_print `
-    spinodal_pytopo3d/results/cantilever_truss_fig5.npz --gamma 6 --element-mm 2 --sample 8
+    spinodal_pytopo3d/results/cantilever_truss_point48_pad_b1.npz --gamma 6 --element-mm 2 --sample 8
 ```
 
 Manufacturing convention: `Frac` is the spinodal **solid** fraction. The GRF

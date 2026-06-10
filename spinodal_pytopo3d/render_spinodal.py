@@ -53,6 +53,43 @@ def load_npz_fields(npz_path):
     return fields, nx, ny, nz, d
 
 
+def _angles_from_axis(axis):
+    """Euler angles with U[:,2] aligned to `axis` for columnar rendering."""
+    axis = np.asarray(axis, dtype=np.float32)
+    n = np.linalg.norm(axis, axis=-1, keepdims=True)
+    n[n < 1e-8] = 1.0
+    v = axis / n
+    beta = np.arcsin(np.clip(v[..., 0], -1.0, 1.0)).astype(np.float32)
+    gamma = np.arctan2(-v[..., 1], v[..., 2]).astype(np.float32)
+    alpha = np.zeros_like(beta, dtype=np.float32)
+    return alpha, beta, gamma
+
+
+def mirror_fields_y(fields):
+    """Mirror a half-y result into a full-width field for presentation.
+
+    Scalars are mirrored directly. For the mirrored side, reconstruct angles
+    from the reflected columnar stiff axis so streamlines and pores point in the
+    physically mirrored direction.
+    """
+    from spinodal_pytopo3d import spinodal_material as sm
+
+    out = {}
+    for key in ("rho_bar", "Frac"):
+        out[key] = np.concatenate([fields[key][::-1, :, :], fields[key]], axis=0)
+
+    ny, nx, nz = fields["alpha"].shape
+    flat = [fields[k].ravel(order="F") for k in ("alpha", "beta", "gamma")]
+    axis = sm.stiff_axis(*flat).reshape((ny, nx, nz, 3), order="F")
+    mirror_axis = axis[::-1, :, :, :].copy()
+    mirror_axis[..., 1] *= -1.0
+    ma, mb, mg = _angles_from_axis(mirror_axis)
+    out["alpha"] = np.concatenate([ma, fields["alpha"]], axis=0)
+    out["beta"] = np.concatenate([mb, fields["beta"]], axis=0)
+    out["gamma"] = np.concatenate([mg, fields["gamma"]], axis=0)
+    return out
+
+
 # ---------------------------------------------------------------- rotations
 def _rx(a):
     c, s = math.cos(a), math.sin(a)
@@ -358,9 +395,15 @@ def main():
                    help="remove floating bits via 3D connected components (keep largest)")
     p.add_argument("--declutter-min-frac", type=float, default=0.0,
                    help="also keep components >= this fraction of the largest (0=largest only)")
+    p.add_argument("--mirror-y", action="store_true",
+                   help="mirror a half-y symmetry result into full width for presentation")
     args = p.parse_args()
 
     fields, nx, ny, nz, raw = load_npz_fields(args.npz)
+    if args.mirror_y:
+        fields = mirror_fields_y(fields)
+        ny *= 2
+        print(f"mirrored half-y result for rendering: {nx}x{ny}x{nz}")
     mask = fields["rho_bar"] >= args.threshold
     print(f"mesh {nx}x{ny}x{nz}; material cells (rho_bar>={args.threshold}): "
           f"{int(mask.sum())}/{mask.size}; Frac[mask] "

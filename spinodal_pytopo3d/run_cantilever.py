@@ -40,7 +40,7 @@ def node_id0(ix, iy, iz, nelx, nely, nelz):
     return iy + ix * (nely + 1) + iz * (nelx + 1) * (nely + 1)
 
 
-def tip_load_force(nelx, nely, nelz, ndof):
+def tip_load_force(nelx, nely, nelz, ndof, symmetry="none"):
     """Concentrated -x3 nodal load at the center of the free-end face.
 
     The earlier implementation used a force_field entry on the last element and
@@ -49,7 +49,9 @@ def tip_load_force(nelx, nely, nelz, ndof):
     (x=nelx, y=nely/2, z=nelz/2).
     """
     F = np.zeros(ndof)
-    ix, iy, iz = nelx, nely // 2, nelz // 2
+    ix = nelx
+    iy = 0 if symmetry == "half-y" else nely // 2
+    iz = nelz // 2
     nid = node_id0(ix, iy, iz, nelx, nely, nelz)
     F[3 * nid + 2] = -1.0
     return F
@@ -69,12 +71,14 @@ def load_summary(F, nelx, nely, nelz):
     return out
 
 
-def make_load_pad_mask(nelx, nely, nelz, radius):
+def make_load_pad_mask(nelx, nely, nelz, radius, symmetry="none"):
     """Element mask for a small passive pad around the free-end center load node."""
     mask = np.zeros(nelx * nely * nelz, dtype=bool)
     if radius <= 0:
         return mask
-    cx, cy, cz = float(nelx), float(nely) / 2.0, float(nelz) / 2.0
+    cx = float(nelx)
+    cy = 0.0 if symmetry == "half-y" else float(nely) / 2.0
+    cz = float(nelz) / 2.0
     r2 = float(radius) ** 2
     for elz in range(nelz):
         for elx in range(nelx):
@@ -83,6 +87,30 @@ def make_load_pad_mask(nelx, nely, nelz, radius):
                 if (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2 <= r2:
                     mask[ely + elx * nely + elz * nelx * nely] = True
     return mask
+
+
+def build_cantilever_supports(nelx, nely, nelz, ndof, symmetry="none"):
+    """Left-face clamp plus optional half-domain symmetry constraints.
+
+    `half-y` represents the paper's half-width computational domain. The
+    symmetry plane is y=0, parallel to x1-x3, so only the normal displacement
+    component u_y is fixed there. The left face remains fully clamped.
+    """
+    freedofs0, fixeddof0 = build_supports(nelx, nely, nelz, ndof)
+    if symmetry == "none":
+        return freedofs0, fixeddof0
+    if symmetry != "half-y":
+        raise ValueError(f"unsupported symmetry mode: {symmetry}")
+
+    sym_nodes = []
+    for iz in range(nelz + 1):
+        for ix in range(nelx + 1):
+            sym_nodes.append(node_id0(ix, 0, iz, nelx, nely, nelz))
+    sym_dofs = 3 * np.asarray(sym_nodes, dtype=int) + 1
+    fixeddof0 = np.unique(np.concatenate([fixeddof0, sym_dofs]))
+    all_dofs0 = np.arange(ndof)
+    freedofs0 = all_dofs0[~np.isin(all_dofs0, fixeddof0, assume_unique=True)]
+    return freedofs0, fixeddof0
 
 
 def run(args):
@@ -96,15 +124,16 @@ def run(args):
         rmin = nelx / 36.0            # R=0.4cm on a 14.4cm (=nelx el) beam
         Emin = 1e-4
         print(f"[fig5] faithful: 3:1:1 domain, tip load, rmin={rmin:.2f} (R=0.4cm), Ersatz={Emin}")
+    if args.symmetry == "half-y":
+        print("[symmetry] half-y: solve half-width domain with u_y=0 on the x1-x3 center plane")
 
-    F = (tip_load_force(nelx, nely, nelz, ndof) if args.load == "tip"
+    F = (tip_load_force(nelx, nely, nelz, ndof, args.symmetry) if args.load == "tip"
          else build_force_vector(nelx, nely, nelz, ndof))
     load_info = load_summary(F, nelx, nely, nelz)
     print(f"[load] nonzero nodal loads: {load_info}")
-    freedofs0, fixeddof0 = build_supports(nelx, nely, nelz, ndof)
-    print(f"[support] fixed left-face DOFs: {fixeddof0.size} "
-          f"({fixeddof0.size // 3} nodes)")
-    passive_z = make_load_pad_mask(nelx, nely, nelz, args.load_pad_radius)
+    freedofs0, fixeddof0 = build_cantilever_supports(nelx, nely, nelz, ndof, args.symmetry)
+    print(f"[support] fixed DOFs: {fixeddof0.size}")
+    passive_z = make_load_pad_mask(nelx, nely, nelz, args.load_pad_radius, args.symmetry)
     passive_frac_value = args.load_pad_frac if passive_z.any() else None
     if passive_z.any():
         pad_vol = passive_z.sum() * passive_frac_value / (nelx * nely * nelz)
@@ -130,7 +159,7 @@ def run(args):
             volfrac=args.volfrac, rho_min=1.0, rho_max=1.0, optimize_density=False,
             move_z=0.05, move_frac=0.0, move_angle=0.0, Emin=Emin, angle_subiters=0,
             penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
-            beta0=0.1, beta_add=0.5, beta_period=15, beta_max=25.0,
+            beta0=1.0, beta_add=0.5, beta_period=15, beta_max=25.0,
             passive_z=passive_z, passive_frac_value=1.0 if passive_z.any() else None,
             max_iter=args.maxiter, verbose=False,
         )
@@ -153,7 +182,7 @@ def run(args):
                 optimize_density=(case == "truss"),
                 move_z=0.05, move_frac=0.05, move_angle=0.25, Emin=Emin,
                 penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
-                beta0=0.1, beta_add=0.5, beta_period=15, beta_max=25.0,
+                beta0=1.0, beta_add=0.5, beta_period=15, beta_max=25.0,
                 angle_subiters=30, angle_period=25, angle_phase_iter=150,
                 passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
@@ -199,6 +228,7 @@ def run(args):
             passive_z=passive_z.astype(np.uint8),
             load_pad_radius=float(args.load_pad_radius),
             load_pad_frac=float(passive_frac_value) if passive_frac_value is not None else np.nan,
+            symmetry=np.array(args.symmetry),
             nelx=nelx, nely=nely, nelz=nelz, volfrac=args.volfrac,
         )
         _save_plots(res, label, f0)
@@ -284,6 +314,8 @@ def build_argparser():
                    help="passive macro pad radius around the free-end center load node, in elements")
     p.add_argument("--load-pad-frac", type=float, default=0.7,
                    help="spinodal solid fraction pinned inside the passive load pad")
+    p.add_argument("--symmetry", choices=["none", "half-y"], default="none",
+                   help="half-y solves the half-width Fig.5 domain with u_y=0 on y=0")
     p.add_argument("--fig5", action="store_true",
                    help="faithful Adv.Mater.2022 Fig.5 setup (tip load, R=0.4cm, paper "
                         "p-continuation, additive beta->25, Ersatz 1e-4)")
