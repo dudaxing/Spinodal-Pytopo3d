@@ -8,10 +8,19 @@ matrix D^H as a function of spinodal density rho:
 
     D^H(rho) = sum_i  CH_coeff[:, :, i] * rho**(P-1-i)          (P-1 order poly)
 
-Conventions (identical to the original code, so the data stays valid):
-  * Voigt strain order [xx, yy, zz, yz, xz, xy] with engineering shear.
-  * Element rotation U = Rx(gamma) @ Ry(beta) @ Rz(alpha); the 6x6 Bond/Voigt
-    matrix N = voigt(U); the rotated tensor used in assembly is  N^T D^H N.
+Conventions:
+  * Voigt strain order [xx, yy, zz, yz, xz, xy] with engineering shear
+    (identical to the original code, so the data stays valid).
+  * Element rotation U = Rx(gamma) @ Ry(beta) @ Rz(alpha) maps local -> global;
+    the columnar stiff axis (local x3) is U[:,2] (stiff_axis). Assembly uses
+    D_e = N^T D^H N with the strain Bond matrix N = voigt(U^T), equivalent to
+    the 4th-order rotation C_glob = U.C_loc. Cross-validated in _rot_check.
+  * NOTE: this deliberately deviates from the released TO_Spinodal code, whose
+    Bond matrix (a) was missing the factor 2 in the three shear-row/normal-col
+    entries (rows 4-6, col 1) -- breaking isotropy invariance at oblique
+    angles -- and (b) effectively rotated by U^T, putting the stiff axis at
+    U[2,:] instead of the U[:,2] used by its own orientation interpretation.
+    Both are corrected here; see _rot_check.py.
 
 All builders are vectorized over elements (leading axis n).
 """
@@ -98,11 +107,11 @@ def _voigt(U: np.ndarray) -> np.ndarray:
     N[:, 1, 3] = u11*u12; N[:, 1, 4] = u12*u10; N[:, 1, 5] = u10*u11
     N[:, 2, 0] = u20*u20; N[:, 2, 1] = u21*u21; N[:, 2, 2] = u22*u22
     N[:, 2, 3] = u21*u22; N[:, 2, 4] = u22*u20; N[:, 2, 5] = u20*u21
-    N[:, 3, 0] = u10*u20; N[:, 3, 1] = 2*u11*u21; N[:, 3, 2] = 2*u12*u22
+    N[:, 3, 0] = 2*u10*u20; N[:, 3, 1] = 2*u11*u21; N[:, 3, 2] = 2*u12*u22
     N[:, 3, 3] = u12*u21+u11*u22; N[:, 3, 4] = u22*u10+u20*u12; N[:, 3, 5] = u20*u11+u21*u10
-    N[:, 4, 0] = u20*u00; N[:, 4, 1] = 2*u21*u01; N[:, 4, 2] = 2*u22*u02
+    N[:, 4, 0] = 2*u20*u00; N[:, 4, 1] = 2*u21*u01; N[:, 4, 2] = 2*u22*u02
     N[:, 4, 3] = u21*u02+u22*u01; N[:, 4, 4] = u20*u02+u22*u00; N[:, 4, 5] = u20*u01+u21*u00
-    N[:, 5, 0] = u00*u10; N[:, 5, 1] = 2*u01*u11; N[:, 5, 2] = 2*u02*u12
+    N[:, 5, 0] = 2*u00*u10; N[:, 5, 1] = 2*u01*u11; N[:, 5, 2] = 2*u02*u12
     N[:, 5, 3] = u01*u12+u02*u11; N[:, 5, 4] = u00*u12+u02*u10; N[:, 5, 5] = u00*u11+u01*u10
     return N
 
@@ -122,19 +131,19 @@ def _voigt_deriv(U: np.ndarray, dU: np.ndarray) -> np.ndarray:
     R[:, 1, 3] = u11*d12+d11*u12; R[:, 1, 4] = u12*d10+d12*u10; R[:, 1, 5] = u10*d11+d10*u11
     R[:, 2, 0] = 2*u20*d20; R[:, 2, 1] = 2*u21*d21; R[:, 2, 2] = 2*u22*d22
     R[:, 2, 3] = u21*d22+d21*u22; R[:, 2, 4] = u22*d20+d22*u20; R[:, 2, 5] = u20*d21+d20*u21
-    R[:, 3, 0] = u10*d20+d10*u20
+    R[:, 3, 0] = 2*(u10*d20+d10*u20)
     R[:, 3, 1] = 2*u11*d21+2*d11*u21
     R[:, 3, 2] = 2*u12*d22+2*d12*u22
     R[:, 3, 3] = u12*d21+d12*u21+u11*d22+d11*u22
     R[:, 3, 4] = u22*d10+d22*u10+u20*d12+d20*u12
     R[:, 3, 5] = u20*d11+d20*u11+u21*d10+d21*u10
-    R[:, 4, 0] = u20*d00+d20*u00
+    R[:, 4, 0] = 2*(u20*d00+d20*u00)
     R[:, 4, 1] = 2*u21*d01+2*d21*u01
     R[:, 4, 2] = 2*u22*d02+2*d22*u02
     R[:, 4, 3] = u21*d02+d21*u02+u22*d01+d22*u01
     R[:, 4, 4] = u20*d02+d20*u02+u22*d00+d22*u00
     R[:, 4, 5] = u20*d01+d20*u01+u21*d00+d21*u00
-    R[:, 5, 0] = u00*d10+d00*u10
+    R[:, 5, 0] = 2*(u00*d10+d00*u10)
     R[:, 5, 1] = 2*u01*d11+2*d01*u11
     R[:, 5, 2] = 2*u02*d12+2*d02*u12
     R[:, 5, 3] = u01*d12+d01*u12+u02*d11+d02*u11
@@ -183,15 +192,22 @@ def stiff_axis(alpha, beta, gamma):
 
 
 def rotation_voigt(alpha, beta, gamma):
-    """Return N and (dN/dalpha, dN/dbeta, dN/dgamma), each (n,6,6)."""
+    """Return N and (dN/dalpha, dN/dbeta, dN/dgamma), each (n,6,6).
+
+    N is built from U^T so that D_e = N^T D^H N equals the 4th-order tensor
+    rotation C_glob = U.C_loc (vectors transform v_glob = U v_loc). This keeps
+    the assembly consistent with stiff_axis() = U[:,2]: the columnar stiff
+    local-x3 axis lands at U[:,2] in the global frame. Validated in _rot_check.
+    """
     alpha = np.asarray(alpha, float).ravel()
     beta = np.asarray(beta, float).ravel()
     gamma = np.asarray(gamma, float).ravel()
     U, dU_da, dU_db, dU_dg = _rot3(alpha, beta, gamma)
-    N = _voigt(U)
-    dN_da = _voigt_deriv(U, dU_da)
-    dN_db = _voigt_deriv(U, dU_db)
-    dN_dg = _voigt_deriv(U, dU_dg)
+    Ut = U.transpose(0, 2, 1)
+    N = _voigt(Ut)
+    dN_da = _voigt_deriv(Ut, dU_da.transpose(0, 2, 1))
+    dN_db = _voigt_deriv(Ut, dU_db.transpose(0, 2, 1))
+    dN_dg = _voigt_deriv(Ut, dU_dg.transpose(0, 2, 1))
     return N, dN_da, dN_db, dN_dg
 
 
