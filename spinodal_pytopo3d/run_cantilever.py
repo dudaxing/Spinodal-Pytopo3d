@@ -24,8 +24,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "PyTopo3D-main"))
 from pytopo3d.utils.assembly import build_force_vector, build_supports  # noqa: E402
-from pytopo3d.utils.filter import build_filter  # noqa: E402
 
+# vectorized drop-in for pytopo3d.utils.filter.build_filter (same H/Hs, gated
+# by _filter_check); the upstream Python-loop builder needs >15 GB at the
+# paper's 324k-element mesh with R=5 elements.
+from spinodal_pytopo3d.fast_filter import build_filter_fast as build_filter
 from spinodal_pytopo3d.spinodal_fea import SpinodalFEA
 from spinodal_pytopo3d.simp_baseline import simp_topopt
 from spinodal_pytopo3d.optimizer import OptOptions, optimize
@@ -33,13 +36,84 @@ from spinodal_pytopo3d.optimizer import OptOptions, optimize
 RESULTS = os.path.join(os.path.dirname(__file__), "results")
 
 
-def tip_load_force(nelx, nely, nelz, ndof):
-    """Concentrated -x3 load at the CENTER of the free-end face (x1=L, depth-center,
-    height-center) -- matches Fig. 5a's Load arrow at the right-end center. Applied
-    on one element so it is local."""
-    ff = np.zeros((nely, nelx, nelz, 3))
-    ff[nely // 2, nelx - 1, nelz // 2, 2] = -1.0
-    return build_force_vector(nelx, nely, nelz, ndof, force_field=ff)
+def node_id0(ix, iy, iz, nelx, nely, nelz):
+    """0-based node id for PyTopo3D's Fortran-order node numbering."""
+    if not (0 <= ix <= nelx and 0 <= iy <= nely and 0 <= iz <= nelz):
+        raise ValueError(f"node ({ix}, {iy}, {iz}) outside grid {nelx}x{nely}x{nelz}")
+    return iy + ix * (nely + 1) + iz * (nelx + 1) * (nely + 1)
+
+
+def tip_load_force(nelx, nely, nelz, ndof, symmetry="none"):
+    """Concentrated -x3 nodal load at the center of the free-end face.
+
+    The earlier implementation used a force_field entry on the last element and
+    PyTopo3D distributed it to that element's eight corner nodes. Fig. 5's load
+    is a point load on the right face center, so apply it directly to the node
+    (x=nelx, y=nely/2, z=nelz/2).
+    """
+    F = np.zeros(ndof)
+    ix = nelx
+    iy = 0 if symmetry == "half-y" else nely // 2
+    iz = nelz // 2
+    nid = node_id0(ix, iy, iz, nelx, nely, nelz)
+    F[3 * nid + 2] = -1.0
+    return F
+
+
+def load_summary(F, nelx, nely, nelz):
+    """Return loaded nodal coordinates and force components for diagnostics."""
+    out = []
+    for dof in np.flatnonzero(np.abs(F) > 0):
+        nid, comp = divmod(int(dof), 3)
+        plane = (nelx + 1) * (nely + 1)
+        iz = nid // plane
+        rem = nid - iz * plane
+        ix = rem // (nely + 1)
+        iy = rem - ix * (nely + 1)
+        out.append((ix, iy, iz, comp, float(F[dof])))
+    return out
+
+
+def make_load_pad_mask(nelx, nely, nelz, radius, symmetry="none"):
+    """Element mask for a small passive pad around the free-end center load node."""
+    mask = np.zeros(nelx * nely * nelz, dtype=bool)
+    if radius <= 0:
+        return mask
+    cx = float(nelx)
+    cy = 0.0 if symmetry == "half-y" else float(nely) / 2.0
+    cz = float(nelz) / 2.0
+    r2 = float(radius) ** 2
+    for elz in range(nelz):
+        for elx in range(nelx):
+            for ely in range(nely):
+                x, y, z = elx + 0.5, ely + 0.5, elz + 0.5
+                if (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2 <= r2:
+                    mask[ely + elx * nely + elz * nelx * nely] = True
+    return mask
+
+
+def build_cantilever_supports(nelx, nely, nelz, ndof, symmetry="none"):
+    """Left-face clamp plus optional half-domain symmetry constraints.
+
+    `half-y` represents the paper's half-width computational domain. The
+    symmetry plane is y=0, parallel to x1-x3, so only the normal displacement
+    component u_y is fixed there. The left face remains fully clamped.
+    """
+    freedofs0, fixeddof0 = build_supports(nelx, nely, nelz, ndof)
+    if symmetry == "none":
+        return freedofs0, fixeddof0
+    if symmetry != "half-y":
+        raise ValueError(f"unsupported symmetry mode: {symmetry}")
+
+    sym_nodes = []
+    for iz in range(nelz + 1):
+        for ix in range(nelx + 1):
+            sym_nodes.append(node_id0(ix, 0, iz, nelx, nely, nelz))
+    sym_dofs = 3 * np.asarray(sym_nodes, dtype=int) + 1
+    fixeddof0 = np.unique(np.concatenate([fixeddof0, sym_dofs]))
+    all_dofs0 = np.arange(ndof)
+    freedofs0 = all_dofs0[~np.isin(all_dofs0, fixeddof0, assume_unique=True)]
+    return freedofs0, fixeddof0
 
 
 def run(args):
@@ -53,10 +127,27 @@ def run(args):
         rmin = nelx / 36.0            # R=0.4cm on a 14.4cm (=nelx el) beam
         Emin = 1e-4
         print(f"[fig5] faithful: 3:1:1 domain, tip load, rmin={rmin:.2f} (R=0.4cm), Ersatz={Emin}")
+    si = args.si_schedule
+    beta0 = 0.1 if si else 1.0
+    cont_tol = 0.02 if si else 0.0
+    if si:
+        print("[si] SI-exact schedule (Eq. S11/S12): mu*=1.25 every 5 iters, "
+              "tau=0.99^k decay, xi0=0.1, continuation tol=0.02")
+    if args.symmetry == "half-y":
+        print("[symmetry] half-y: solve half-width domain with u_y=0 on the x1-x3 center plane")
 
-    F = (tip_load_force(nelx, nely, nelz, ndof) if args.load == "tip"
+    F = (tip_load_force(nelx, nely, nelz, ndof, args.symmetry) if args.load == "tip"
          else build_force_vector(nelx, nely, nelz, ndof))
-    freedofs0, _ = build_supports(nelx, nely, nelz, ndof)
+    load_info = load_summary(F, nelx, nely, nelz)
+    print(f"[load] nonzero nodal loads: {load_info}")
+    freedofs0, fixeddof0 = build_cantilever_supports(nelx, nely, nelz, ndof, args.symmetry)
+    print(f"[support] fixed DOFs: {fixeddof0.size}")
+    passive_z = make_load_pad_mask(nelx, nely, nelz, args.load_pad_radius, args.symmetry)
+    passive_frac_value = args.load_pad_frac if passive_z.any() else None
+    if passive_z.any():
+        pad_vol = passive_z.sum() * passive_frac_value / (nelx * nely * nelz)
+        print(f"[load-pad] passive elements={int(passive_z.sum())}, radius={args.load_pad_radius:g}, "
+              f"Frac={passive_frac_value:g}, minimum volume contribution={pad_vol:.5f}")
     H, Hs = build_filter(nelx, nely, nelz, rmin)
 
     fea = SpinodalFEA(nelx, nely, nelz, F, freedofs0, H, Hs,
@@ -77,7 +168,9 @@ def run(args):
             volfrac=args.volfrac, rho_min=1.0, rho_max=1.0, optimize_density=False,
             move_z=0.05, move_frac=0.0, move_angle=0.0, Emin=Emin, angle_subiters=0,
             penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
-            beta0=0.1, beta_add=0.5, beta_period=15, beta_max=25.0,
+            beta0=beta0, beta_add=0.5, beta_period=15, beta_max=25.0,
+            si_schedule=si, cont_tol=cont_tol,
+            passive_z=passive_z, passive_frac_value=1.0 if passive_z.any() else None,
             max_iter=args.maxiter, verbose=False,
         )
         f0 = optimize(fea, opt0)["c"]
@@ -99,8 +192,10 @@ def run(args):
                 optimize_density=(case == "truss"),
                 move_z=0.05, move_frac=0.05, move_angle=0.25, Emin=Emin,
                 penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
-                beta0=0.1, beta_add=0.5, beta_period=15, beta_max=25.0,
+                beta0=beta0, beta_add=0.5, beta_period=15, beta_max=25.0,
+                si_schedule=si, cont_tol=cont_tol,
                 angle_subiters=30, angle_period=25, angle_phase_iter=150,
+                passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
             )
         else:
@@ -108,6 +203,8 @@ def run(args):
                 volfrac=args.volfrac, penal=args.penal,
                 rho_min=0.3, rho_max=0.7,
                 optimize_density=(case == "truss"),
+                si_schedule=si,
+                passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
                 beta_start_iter=min(150, args.maxiter // 3),
             )
@@ -138,6 +235,12 @@ def run(args):
             frac_p10=frac_summary["p10"], frac_p50=frac_summary["p50"],
             frac_p90=frac_summary["p90"], frac_hi065=frac_summary["hi065"],
             frac_lo035=frac_summary["lo035"],
+            load_info=np.array(load_info, dtype=float),
+            fixed_dof_count=int(fixeddof0.size),
+            passive_z=passive_z.astype(np.uint8),
+            load_pad_radius=float(args.load_pad_radius),
+            load_pad_frac=float(passive_frac_value) if passive_frac_value is not None else np.nan,
+            symmetry=np.array(args.symmetry),
             nelx=nelx, nely=nely, nelz=nelz, volfrac=args.volfrac,
         )
         _save_plots(res, label, f0)
@@ -218,10 +321,20 @@ def build_argparser():
     p.add_argument("--case", choices=["shell", "truss", "both"], default="both")
     p.add_argument("--tag", default="", help="suffix for output names (e.g. _64 to avoid overwrite)")
     p.add_argument("--load", choices=["edge", "tip"], default="edge",
-                   help="edge=distributed free-end edge (default); tip=concentrated free-end load")
+                   help="edge=distributed free-end edge (default); tip=nodal point load at free-end center")
+    p.add_argument("--load-pad-radius", type=float, default=0.0,
+                   help="passive macro pad radius around the free-end center load node, in elements")
+    p.add_argument("--load-pad-frac", type=float, default=0.7,
+                   help="spinodal solid fraction pinned inside the passive load pad")
+    p.add_argument("--symmetry", choices=["none", "half-y"], default="none",
+                   help="half-y solves the half-width Fig.5 domain with u_y=0 on y=0")
     p.add_argument("--fig5", action="store_true",
                    help="faithful Adv.Mater.2022 Fig.5 setup (tip load, R=0.4cm, paper "
                         "p-continuation, additive beta->25, Ersatz 1e-4)")
+    p.add_argument("--si-schedule", action="store_true",
+                   help="SI-exact AL schedule (Eq. S11/S12): unconditional mu*=1.25 every "
+                        "5 iters, tau=0.99^k step decay, xi0=0.1, per-step continuation "
+                        "tol=0.02; recommended together with --fig5")
     p.add_argument("--no-pardiso", action="store_true")
     p.add_argument("--no-baseline", action="store_true",
                    help="skip the solid-SIMP baseline (f/f0=NaN); saves time on large meshes")

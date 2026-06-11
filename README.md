@@ -24,22 +24,53 @@ pores are generated later for rendering/STL/slicing.
 
 ## Results
 
-> **Verification history (2026-06-10).** Three silent physics bugs were found
-> and fixed by adding independent-reference self-tests; the gallery below is
-> fully recomputed under the corrected model (`_fig5v3` fields):
-> 1. Bond/Voigt rotation: three shear-row entries missing a factor 2, and an
->    effective `U^T` rotation that put the stiff axis at `U[2,:]` while
->    orientation was interpreted as `U[:,2]` (both inherited from the released
->    TO_Spinodal code; caught by `_rot_check.py`, an `np.einsum` 4th-order
->    tensor rotation cross-check).
-> 2. Element/edof node ordering: PyTopo3D's `lk_H8` uses the textbook x-first
->    local node ring while PyTopo3D's own `build_edof` wires y-first; mixing
->    them scrambles assembled physics (isotropic bar ~37x too compliant,
->    columnar Young's anisotropy 11.5x collapsed to ~1.1x). Caught by
->    `_bar_check.py` (assembled bar vs analytic compliance), which element-level
->    and self-consistent FD tests provably cannot catch.
+> **Verification history.** This branch fuses the two development lines
+> (`main`'s corrected-physics rerun and the `codex-v1`/`si-fidelity` line's
+> SI-fidelity work). Silent bugs were found and fixed by adding
+> independent-reference self-tests; the gallery below uses the `_fig5v3`
+> fields computed under the fully corrected model:
+> 1. **Bond/Voigt rotation** (both lines, 2026-06-10): three shear-row entries
+>    missing a factor 2, and an effective `U^T` rotation that put the stiff
+>    axis at `U[2,:]` while orientation was interpreted as `U[:,2]` (both
+>    inherited from the released TO_Spinodal code; caught by `_rot_check.py`,
+>    an `np.einsum` 4th-order tensor rotation cross-check).
+> 2. **Element/edof node ordering** (both lines, 2026-06-10): PyTopo3D's
+>    `lk_H8` uses the textbook x-first local node ring while PyTopo3D's own
+>    `build_edof` wires y-first; mixing them scrambles assembled physics
+>    (isotropic bar ~37x too compliant, columnar Young's anisotropy 11.5x
+>    collapsed to ~1.1x). Caught by `_bar_check.py` (assembled bar vs analytic
+>    compliance), which element-level and self-consistent FD tests provably
+>    cannot catch. Only the `_fig5v3` results were recomputed after this fix.
+> 3. **Eq. S4 columnar wave-vector cones** (si-fidelity line, 2026-06-11): the
+>    GRF sampler used the whole equatorial band `|v.e3| < sin(30 deg)` -- a
+>    superset of Eq. S4's 30-degree cones around `+-x1`/`+-x2` that renders a
+>    transversely-isotropic microstructure inconsistent with the
+>    `CH_columnar_xy` homogenization data. Affects rendering/STL/slicing only,
+>    not the optimization; gated by the new `_micro_check` cone test. The
+>    gallery renders below are regenerated from the `_fig5v3` fields with the
+>    corrected sampler.
+> 4. **Density-filter builder** (si-fidelity line, 2026-06-11): PyTopo3D's
+>    `build_filter` needs >15 GB at the paper's 324k-element mesh AND silently
+>    drops true neighbors whenever `nely != nelz` (its KD-tree candidate set
+>    uses z-fastest raveling while the integer-distance pruning assumes the
+>    y-fastest element order). The driver now uses the vectorized
+>    `fast_filter.build_filter_fast`, gated bit-exact against a brute-force
+>    reference by `_filter_check.py`. All committed results used
+>    `nely == nelz` meshes and are unaffected, except the exploratory
+>    `_fig5_halfy_pad` run (72x12x24).
+>
+> The si-fidelity line also adds a `--si-schedule` optimizer mode implementing
+> the SI's published AL scheme (Eq. S11/S12): unconditional `mu *= 1.25` every
+> 5 iterations, deterministic step decay `tau = max(0.99*tau, 0.01)`, initial
+> Heaviside `xi = 0.1`, and per-continuation-step early advance at
+> `tol = 0.02`. The default updater (ported from the released TO_Spinodal
+> code) grows `mu` far more slowly and can leave the volume constraint badly
+> violated for hundreds of iterations; on a 16x8x8 smoke mesh the SI schedule
+> reaches |g| < 1e-3 by iteration ~60 while the legacy schedule is still at
+> g ~ +0.15 (3x over budget).
 
-Fig. 5-style final renderings generated from the corrected saved fields. The
+Fig. 5-style final renderings generated from the corrected saved fields with
+the Eq. S4 cone-restricted sampler. The
 gallery uses a dense presentation render (`m=1.5`, `n_waves=120`) because the
 paper's physical pore wavelength is visually too coarse on this reduced mesh.
 
@@ -60,12 +91,12 @@ Density-colored truss and print-slice preview:
 ![slice montage](spinodal_pytopo3d/results/cantilever_truss_fig5v3_slices/_sample_montage.png)
 
 Results with the consistent solid-isotropic baseline (same optimizer, same
-nodal tip load; `f0 = 100.13` on the 72x24x24 mesh):
+centered tip load for `f` and `f0`; `f0 = 100.13` on the 72x24x24 mesh):
 
-| case | density policy | f/f0 (ours) | f/f0 (paper) |
-| --- | --- | ---: | ---: |
-| shell | `Frac = 0.3` fixed | **2.90** | 2.99 |
-| truss | `0.3 <= Frac <= 0.7` optimized | **0.92** | 0.86 |
+| case | saved field | density policy | f/f0 (ours) | f/f0 (paper) |
+| --- | --- | --- | ---: | ---: |
+| shell | `cantilever_shell_fig5v3.npz` | `Frac = 0.3` fixed | **2.90** | 2.99 |
+| truss | `cantilever_truss_fig5v3.npz` | `0.3 <= Frac <= 0.7` optimized | **0.92** | 0.86 |
 
 Both headline results of the paper are reproduced: the fixed-porosity shell
 trades stiffness for porosity (`f/f0 > 1`), and the variable-density truss
@@ -75,6 +106,15 @@ density is bounds-seeking as the paper reports (S4.3): 37% of elements at
 remaining gap tracks the 16x coarser mesh (72x24x24 full domain here vs
 180x60x60 with half-domain symmetry in the paper) and the single-columnar
 simplification (no four-material `Z_i` selection).
+
+Load-model note: the `_fig5v3` fields were computed with the centered tip
+load distributed over the end element's 8 corner nodes (the pre-merge
+driver). The current `--load tip` applies a *true* nodal point load at the
+free-end face center (from the codex line); combine it with
+`--load-pad-radius` to regularize the point-load singularity. Earlier
+codex-line results kept under `results/` (`*_point48*`, `*_fig5_halfy_pad*`)
+demonstrate that load model but predate the node-ordering fix, so their
+compliance numbers are invalid.
 
 ## Connectivity & cleanliness
 
@@ -151,33 +191,66 @@ Fig. 5-aligned mode:
 
 `--fig5` switches to the concentrated tip load, `R=0.4 cm` filter scaling,
 `Emin=1e-4`, paper-style p-continuation, additive Heaviside beta continuation,
-and the SI-style orientation staggered update schedule.
+and the SI-style orientation staggered update schedule. Add `--si-schedule`
+for the SI's exact AL update (Eq. S11/S12: unconditional `mu*=1.25` every 5
+iterations, `tau=0.99^k` step decay, `xi0=0.1`, continuation `tol=0.02`) —
+this enforces the volume constraint much faster than the legacy updater.
+
+The paper itself solves the cantilever on a half-width domain with 324,000
+elements (SI S4.1: 180x30x60 at 0.8 mm, so R = 0.4 cm = 5 elements). The
+corresponding configuration here is:
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 180 --nely 30 --nelz 60 --volfrac 0.05 --maxiter 1250 `
+    --case truss --fig5 --si-schedule --symmetry half-y --tag _paper
+```
+
+(~1M DOF; needs a large-memory machine or `--use-gpu`. The full SI schedule
+runs ~450 continuation + ~750 beta-ramp iterations.)
+
+The SI also solves the cantilever on a half-width domain with a symmetry plane
+parallel to `x1-x3`. This is available with:
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 72 --nely 12 --nelz 24 --volfrac 0.05 --maxiter 700 `
+    --case truss --fig5 --tag _fig5_halfy_pad --symmetry half-y --load-pad-radius 2.0
+```
+
+Saved `.npz` files now also store run diagnostics: `load_info` (loaded node
+coordinates and force components, e.g. `[[72, 12, 12, 2, -1]]` for a single
+`-x3` force at `(x1=L, x2=center, x3=center)`), `fixed_dof_count`,
+`passive_z`, `load_pad_radius`/`load_pad_frac`, and `symmetry`.
 
 ## Post-Processing
 
 Standalone export:
 
 ```powershell
-.\.venv\Scripts\python.exe -m spinodal_pytopo3d.export spinodal_pytopo3d/results/cantilever_truss_fig5.npz --vtk
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.export spinodal_pytopo3d/results/cantilever_truss_fig5v3.npz --vtk
 ```
 
 Embedded microstructure render:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d.render_spinodal `
-    spinodal_pytopo3d/results/cantilever_truss_64.npz --m 1.5 --samples-per-cell 8 --n-waves 120 `
+    spinodal_pytopo3d/results/cantilever_truss_fig5v3.npz --m 1.5 --samples-per-cell 8 --n-waves 120 `
     --declutter --presentation
 ```
 
 For physical Fig. 5 pore wavelength, use `--gamma 6 --element-mm 2`; on the
 current reduced mesh that looks much coarser and less continuous than the paper's
-much finer optimization grid.
+much finer optimization grid. For half-domain (`--symmetry half-y`) results,
+add `--mirror-y` to `render_spinodal`/`render_streamlines` to mirror the saved
+half-width fields (including the reflected stiff-axis orientation) into a
+full-width presentation render.
 
 Print-slice preview:
 
 ```powershell
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d.slice_print `
-    spinodal_pytopo3d/results/cantilever_truss_fig5.npz --gamma 6 --element-mm 2 --sample 8
+    spinodal_pytopo3d/results/cantilever_truss_fig5v3.npz --gamma 6 --element-mm 2 --sample 8
 ```
 
 Manufacturing convention: `Frac` is the spinodal **solid** fraction. The GRF
@@ -192,7 +265,8 @@ microstructure volume is approximately `Frac`.
 | `spinodal_material.py` | `D^H(Frac)` polynomial, Voigt rotation, analytic derivatives |
 | `interpolation.py` | macro SIMP + Heaviside projection |
 | `spinodal_fea.py` | assembly, solve, compliance, and sensitivities |
-| `optimizer.py` | augmented-Lagrangian normalized-gradient update and angle sub-iterations |
+| `optimizer.py` | augmented-Lagrangian updates (legacy + SI Eq. S10-S12 schedules) and angle sub-iterations |
+| `fast_filter.py` | vectorized density-filter builder (drop-in for PyTopo3D's `build_filter`) |
 | `simp_baseline.py` | standalone solid-isotropic SIMP/OC baseline |
 | `run_cantilever.py` | driver and result serialization |
 | `render_spinodal.py` | embedded GRF microstructure rendering and STL export |
@@ -208,11 +282,14 @@ microstructure volume is approximately `Frac`.
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._micro_check
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._rot_check
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._bar_check
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d._filter_check
 ```
 
 Validated checks include H8 stiffness agreement with PyTopo3D `lk_H8`, material
 and rotation finite-difference checks, full FEA sensitivity finite differences,
-and the manufacturing level-set solid-fraction convention. `_rot_check`
+the manufacturing level-set solid-fraction convention, the Eq. S4 columnar
+wave-vector cone restriction, and the density-filter builder (bit-exact vs a
+brute-force reference). `_rot_check`
 cross-validates the assembly's Voigt/Bond rotation against an independent
 4th-order tensor rotation (`np.einsum`): exact equivalence at random oblique
 angles, isotropy invariance of the solid, and the 90-degree stiff-axis swap

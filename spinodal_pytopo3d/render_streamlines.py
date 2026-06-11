@@ -36,6 +36,25 @@ def _vtk_order(flat, nx, ny, nz):
     return _to_3d(flat, nx, ny, nz).ravel(order="F")
 
 
+def _field_yxz_to_flat(field):
+    """(y,x,z) array -> flat element vector with y fastest, then x, then z."""
+    return np.asarray(field).ravel(order="F")
+
+
+def _mirror_y_scalar(flat, nx, ny, nz):
+    field = to_field_yxz(flat, nx, ny, nz)
+    return _field_yxz_to_flat(np.concatenate([field[::-1, :, :], field], axis=0))
+
+
+def _mirror_y_axis(axis, nx, ny, nz):
+    comps = [to_field_yxz(axis[:, k], nx, ny, nz) for k in range(3)]
+    field = np.stack(comps, axis=-1)
+    mirror = field[::-1, :, :, :].copy()
+    mirror[..., 1] *= -1.0
+    full = np.concatenate([mirror, field], axis=0)
+    return np.column_stack([_field_yxz_to_flat(full[..., k]) for k in range(3)])
+
+
 def sign_align(axis):
     """Make the line field a coherent vector field: point toward +x1, with +x3
     as a tie-breaker for near-vertical members (so streamlines don't flip)."""
@@ -62,13 +81,23 @@ def main():
     p.add_argument("--no-body", action="store_true", help="don't draw the faint body")
     p.add_argument("--presentation", action="store_true",
                    help="paper-style view: no axes, tighter zoom, cropped whitespace")
+    p.add_argument("--mirror-y", action="store_true",
+                   help="mirror a half-y symmetry result into full width for presentation")
     p.add_argument("--interactive", action="store_true")
     args = p.parse_args()
 
     d = np.load(args.npz)
     nx, ny, nz = int(d["nelx"]), int(d["nely"]), int(d["nelz"])
-    solid_flat = d["rho_bar"] >= args.threshold
     axis = sign_align(sm.stiff_axis(d["alpha"], d["beta"], d["gamma"]))  # (nele,3) flat F
+    rho_bar = d["rho_bar"]
+    frac = d["Frac"]
+    if args.mirror_y:
+        axis = _mirror_y_axis(axis, nx, ny, nz)
+        rho_bar = _mirror_y_scalar(rho_bar, nx, ny, nz)
+        frac = _mirror_y_scalar(frac, nx, ny, nz)
+        ny *= 2
+        print(f"mirrored half-y result for streamlines: {nx}x{ny}x{nz}")
+    solid_flat = rho_bar >= args.threshold
     axis[~solid_flat] = 0.0                               # zero in void -> streamlines stop
 
     # smooth the (sign-aligned) field for long, coherent streamlines. Normalized
@@ -87,7 +116,7 @@ def main():
         vecs = np.column_stack([ax3[..., k].ravel(order="F") for k in range(3)])
     else:
         vecs = np.column_stack([_vtk_order(axis[:, k], nx, ny, nz) for k in range(3)])
-    dens = _vtk_order(d["Frac"], nx, ny, nz)
+    dens = _vtk_order(frac, nx, ny, nz)
     solid_vtk = _vtk_order(solid_flat.astype(float), nx, ny, nz) > 0.5
 
     grid = pv.ImageData(dimensions=(nx, ny, nz), spacing=(1, 1, 1), origin=(0.5, 0.5, 0.5))
@@ -124,7 +153,7 @@ def main():
         xc = make_axis_coords(nx, spc, 1.0)
         yc = make_axis_coords(ny, spc, 1.0)
         zc = make_axis_coords(nz, spc, 1.0)
-        mask_yxz = to_field_yxz(d["rho_bar"], nx, ny, nz) >= args.threshold
+        mask_yxz = to_field_yxz(rho_bar, nx, ny, nz) >= args.threshold
         try:
             sdf = build_smooth_macro_field(mask_yxz, xc, yc, zc, spc, 0.6, True)
             body = field_to_mesh(sdf, xc, yc, zc)
