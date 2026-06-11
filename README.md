@@ -63,11 +63,14 @@ pores are generated later for rendering/STL/slicing.
 > the SI's published AL scheme (Eq. S11/S12): unconditional `mu *= 1.25` every
 > 5 iterations, deterministic step decay `tau = max(0.99*tau, 0.01)`, initial
 > Heaviside `xi = 0.1`, and per-continuation-step early advance at
-> `tol = 0.02`. The default updater (ported from the released TO_Spinodal
-> code) grows `mu` far more slowly and can leave the volume constraint badly
-> violated for hundreds of iterations; on a 16x8x8 smoke mesh the SI schedule
-> reaches |g| < 1e-3 by iteration ~60 while the legacy schedule is still at
-> g ~ +0.15 (3x over budget).
+> `tol = 0.02`. It is an opt-in research mode and NOT claimed to converge
+> faster: the si-fidelity branch reported the SI schedule enforcing the volume
+> constraint much faster than the legacy heuristic, but that claim does not
+> reproduce -- on a 16x8x8 `--fig5` truss smoke run the legacy updater reaches
+> |g| < 5e-4 by iteration ~140 of the p=1 stage while the SI schedule is still
+> at g ~ +0.05 (the unconditional mu growth is offset by the tau decay; g does
+> decrease monotonically but more slowly). Defaults are unchanged: the legacy
+> TO_Spinodal updater (which produced the v3 results) remains the default.
 
 Fig. 5-style final renderings generated from the corrected saved fields with
 the Eq. S4 cone-restricted sampler. The
@@ -193,8 +196,9 @@ Fig. 5-aligned mode:
 `Emin=1e-4`, paper-style p-continuation, additive Heaviside beta continuation,
 and the SI-style orientation staggered update schedule. Add `--si-schedule`
 for the SI's exact AL update (Eq. S11/S12: unconditional `mu*=1.25` every 5
-iterations, `tau=0.99^k` step decay, `xi0=0.1`, continuation `tol=0.02`) —
-this enforces the volume constraint much faster than the legacy updater.
+iterations, `tau=0.99^k` step decay, `xi0=0.1`, continuation `tol=0.02`); see
+the verification-history note for measured convergence behavior vs the
+default legacy updater.
 
 The paper itself solves the cantilever on a half-width domain with 324,000
 elements (SI S4.1: 180x30x60 at 0.8 mm, so R = 0.4 cm = 5 elements). The

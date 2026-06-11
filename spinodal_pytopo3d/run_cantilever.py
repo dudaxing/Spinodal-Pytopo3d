@@ -203,7 +203,7 @@ def run(args):
                 volfrac=args.volfrac, penal=args.penal,
                 rho_min=0.3, rho_max=0.7,
                 optimize_density=(case == "truss"),
-                si_schedule=si,
+                beta0=beta0, si_schedule=si,
                 passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
                 beta_start_iter=min(150, args.maxiter // 3),
