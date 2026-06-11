@@ -119,6 +119,51 @@ codex-line results kept under `results/` (`*_point48*`, `*_fig5_halfy_pad*`)
 demonstrate that load model but predate the node-ordering fix, so their
 compliance numbers are invalid.
 
+## Half-domain symmetry experiment
+
+The paper solves the cantilever on a half-width domain with symmetry enforced
+at the beam center plane (SI: "symmetry enforced at the centerline of the
+beam, parallel to the x1-x3 plane", 324,000-element half mesh). This is
+available here via `--symmetry half-y` (u_y = 0 on the y=0 plane, centered
+nodal load on the plane) and is validated by the `_sym_check` gate: for a
+symmetric structure the half model reproduces the full-domain load-point
+displacement to ~1e-13, for both isotropic and oriented columnar material.
+
+A controlled experiment at matched effective resolution (half 72x12x24 vs
+full 72x24x24, all other settings identical):
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 72 --nely 12 --nelz 24 --volfrac 0.05 --maxiter 550 `
+    --case both --fig5 --tag _fig5v4r --symmetry half-y
+```
+
+| run | shell f/f0 | truss f/f0 | truss `Frac >= 0.65` |
+| --- | ---: | ---: | ---: |
+| full domain (`_fig5v3`) | 2.90 | 0.92 | 37.0% |
+| half domain, defective upstream filter | 3.74 | 1.01 | 68.8% |
+| **half domain, fixed filter (`_fig5v4r`)** | **2.91** | **0.93** | 37.1% |
+| paper | 2.99 | 0.86 | >60% |
+
+![half-domain truss, mirrored](spinodal_pytopo3d/results/fig5d_truss_v4r_mirrored.png)
+
+Two methodological conclusions:
+
+1. **At this resolution, enforcing symmetry is result-neutral** (ratios match
+   the full domain within ~1%): the full-domain optimizer already converges to
+   essentially symmetric solutions, so `--symmetry half-y` is purely a 2x
+   compute saver. The remaining gap to the paper (0.93 vs 0.86; 37% vs >60%
+   high-density fraction) is therefore attributable to mesh resolution (16x
+   coarser than the paper) and the single-columnar simplification, not to the
+   missing symmetry constraint.
+2. The middle row is a cautionary tale: the run with PyTopo3D's upstream
+   `build_filter` on the `nely != nelz` half mesh (which silently drops 88.5%
+   of the neighbor weights, see Verification history #4) shifted every
+   number substantially -- including a 25% "improvement" of the solid baseline
+   that was entirely a filter artifact. `f/f0` is highly sensitive to baseline
+   convergence quality; always re-verify both numerator and denominator under
+   the same, gated settings.
+
 ## Connectivity & cleanliness
 
 A practical concern for 3D printing is whether the optimized microstructure
@@ -287,13 +332,15 @@ microstructure volume is approximately `Frac`.
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._rot_check
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._bar_check
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._filter_check
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d._sym_check
 ```
 
 Validated checks include H8 stiffness agreement with PyTopo3D `lk_H8`, material
 and rotation finite-difference checks, full FEA sensitivity finite differences,
 the manufacturing level-set solid-fraction convention, the Eq. S4 columnar
-wave-vector cone restriction, and the density-filter builder (bit-exact vs a
-brute-force reference). `_rot_check`
+wave-vector cone restriction, the density-filter builder (bit-exact vs a
+brute-force reference), and the half-domain symmetry model (machine-precision
+displacement equivalence vs the full domain). `_rot_check`
 cross-validates the assembly's Voigt/Bond rotation against an independent
 4th-order tensor rotation (`np.einsum`): exact equivalence at random oblique
 angles, isotropy invariance of the solid, and the 90-degree stiff-axis swap
