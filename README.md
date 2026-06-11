@@ -38,7 +38,15 @@ pores are generated later for rendering/STL/slicing.
 > (ported from the released TO_Spinodal code) grows `mu` far more slowly and
 > can leave the volume constraint badly violated for hundreds of iterations;
 > on a 16x8x8 smoke mesh the SI schedule reaches |g| < 1e-3 by iteration ~60
-> while the legacy schedule is still at g ~ +0.15 (3x over budget).
+> while the legacy schedule is still at g ~ +0.15 (3x over budget). Also
+> replaced PyTopo3D's `build_filter` in the driver with a vectorized
+> equivalent (`fast_filter.py`): the upstream builder needs >15 GB at the
+> paper mesh AND silently drops true neighbors whenever `nely != nelz` (its
+> KD-tree candidate set uses z-fastest raveling while the integer-distance
+> pruning assumes the y-fastest element order; `_filter_check.py` gates the
+> new builder against a brute-force reference). All prior committed results
+> used `nely == nelz` meshes and are unaffected, except the exploratory
+> `_fig5_halfy_pad` run (72x12x24).
 >
 > **Update 2 (2026-06-10, evening): node-ordering bug found in assembly —
 > all numerical results below are invalid and being recomputed.** A new
@@ -267,6 +275,7 @@ microstructure volume is approximately `Frac`.
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._micro_check
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._rot_check
 .\.venv\Scripts\python.exe -m spinodal_pytopo3d._bar_check
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d._filter_check
 ```
 
 Validated checks include H8 stiffness agreement with PyTopo3D `lk_H8`, material

@@ -24,8 +24,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "PyTopo3D-main"))
 from pytopo3d.utils.assembly import build_force_vector, build_supports  # noqa: E402
-from pytopo3d.utils.filter import build_filter  # noqa: E402
 
+# vectorized drop-in for pytopo3d.utils.filter.build_filter (same H/Hs, gated
+# by _filter_check); the upstream Python-loop builder needs >15 GB at the
+# paper's 324k-element mesh with R=5 elements.
+from spinodal_pytopo3d.fast_filter import build_filter_fast as build_filter
 from spinodal_pytopo3d.spinodal_fea import SpinodalFEA
 from spinodal_pytopo3d.simp_baseline import simp_topopt
 from spinodal_pytopo3d.optimizer import OptOptions, optimize
