@@ -110,19 +110,39 @@ def rotation(alpha, beta, gamma):
     return _rx(gamma) @ _ry(beta) @ _rz(alpha)   # U = Rx(g)Ry(b)Rz(a), matches FEA
 
 
-def sample_columnar_wave_vectors_z(count, seed, cone_deg=30.0, leakage=0.10):
-    """Wave vectors near the x-y plane -> structure invariant along z (columns||z)."""
+def sample_columnar_wave_vectors_z(count, seed, cone_deg=30.0, leakage=0.15):
+    """Columnar wave vectors per paper Eq. (S4): theta1 = theta2 = cone_deg, theta3 = 0.
+
+    Restricted vectors fall in the union of cones of half-angle `cone_deg`
+    around the +-x1 and +-x2 axes (|v.e1| > cos(theta) or |v.e2| > cos(theta));
+    the structure is then invariant along x3 (columns || z, stiff axis x3),
+    consistent with the homogenized CH_columnar_xy data used in optimization.
+    Per SI S1.1 a fraction `leakage` (paper: 15%) is left unrestricted on the
+    unit sphere to preserve microstructure connectivity.
+
+    NOTE: an earlier version sampled the whole equatorial band
+    |v.e3| < sin(cone_deg) -- a superset of the Eq. S4 cones that yields a
+    transversely-isotropic (not columnar_xy) microstructure, inconsistent
+    with the homogenization data.
+    """
     rng = np.random.default_rng(seed)
-    plane_sin = math.sin(math.radians(cone_deg))
+    cos_t = math.cos(math.radians(cone_deg))
     out = []
     while len(out) < count:
-        v = rng.normal(size=3).astype(np.float32)
-        n = np.linalg.norm(v)
-        if n == 0:
-            continue
-        v /= n
-        if (rng.random() < leakage) or (abs(v[2]) < plane_sin):  # near x-y plane
-            out.append(v)
+        # Decide the sample's category FIRST (15% unrestricted / 85% in-cone),
+        # then rejection-sample within it. Using leakage as an acceptance
+        # shortcut instead would skew the split toward the uniform share
+        # (in-cone fraction 0.268/0.378 ~ 71% rather than the intended ~89%).
+        is_leak = rng.random() < leakage
+        while True:
+            v = rng.normal(size=3).astype(np.float32)
+            n = np.linalg.norm(v)
+            if n == 0:
+                continue
+            v /= n
+            if is_leak or (abs(v[0]) > cos_t) or (abs(v[1]) > cos_t):
+                out.append(v)
+                break
     return np.stack(out, axis=0)
 
 

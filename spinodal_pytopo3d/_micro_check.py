@@ -27,6 +27,20 @@ def _cutoff(rho):
     return np.sqrt(2.0) * special.erfinv(2.0 * rho - 1.0)
 
 
+def check_wave_vector_caps():
+    """Columnar sampling must follow Eq. S4: >=85% of vectors inside the
+    theta1=theta2=30deg cones around +-e1/+-e2 (15% uniform leakage, of which
+    ~27% lands inside the cones by chance -> expected in-cone share ~89%)."""
+    base = sample_columnar_wave_vectors_z(20000, 123)
+    cos_t = np.cos(np.radians(30.0))
+    in_cones = (np.abs(base[:, 0]) > cos_t) | (np.abs(base[:, 1]) > cos_t)
+    frac = float(in_cones.mean())
+    zmax = float(np.abs(base[in_cones, 2]).max())
+    print(f"columnar wave vectors: {frac*100:.1f}% in Eq. S4 cones "
+          f"(expect ~89%), max |v.e3| in cones = {zmax:.3f} (<= sin30 = 0.5)")
+    return 0.85 <= frac <= 0.95 and zmax <= 0.5 + 1e-6
+
+
 def check_normal_threshold():
     rng = np.random.default_rng(123)
     phi = rng.normal(size=1_000_000)
@@ -96,6 +110,7 @@ def check_slice_layer():
 
 def main():
     checks = [
+        ("wave vector cones (Eq. S4)", check_wave_vector_caps()),
         ("normal threshold", check_normal_threshold()),
         ("3D micro field", check_build_spinodal_field()),
         ("2D slice", check_slice_layer()),
