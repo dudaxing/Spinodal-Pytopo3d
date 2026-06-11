@@ -124,6 +124,12 @@ def run(args):
         rmin = nelx / 36.0            # R=0.4cm on a 14.4cm (=nelx el) beam
         Emin = 1e-4
         print(f"[fig5] faithful: 3:1:1 domain, tip load, rmin={rmin:.2f} (R=0.4cm), Ersatz={Emin}")
+    si = args.si_schedule
+    beta0 = 0.1 if si else 1.0
+    cont_tol = 0.02 if si else 0.0
+    if si:
+        print("[si] SI-exact schedule (Eq. S11/S12): mu*=1.25 every 5 iters, "
+              "tau=0.99^k decay, xi0=0.1, continuation tol=0.02")
     if args.symmetry == "half-y":
         print("[symmetry] half-y: solve half-width domain with u_y=0 on the x1-x3 center plane")
 
@@ -159,7 +165,8 @@ def run(args):
             volfrac=args.volfrac, rho_min=1.0, rho_max=1.0, optimize_density=False,
             move_z=0.05, move_frac=0.0, move_angle=0.0, Emin=Emin, angle_subiters=0,
             penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
-            beta0=1.0, beta_add=0.5, beta_period=15, beta_max=25.0,
+            beta0=beta0, beta_add=0.5, beta_period=15, beta_max=25.0,
+            si_schedule=si, cont_tol=cont_tol,
             passive_z=passive_z, passive_frac_value=1.0 if passive_z.any() else None,
             max_iter=args.maxiter, verbose=False,
         )
@@ -182,7 +189,8 @@ def run(args):
                 optimize_density=(case == "truss"),
                 move_z=0.05, move_frac=0.05, move_angle=0.25, Emin=Emin,
                 penal_steps=(1.0, 1.5, 2.0, 2.5, 3.0), penal_iters=(150, 100, 100, 50, 50),
-                beta0=1.0, beta_add=0.5, beta_period=15, beta_max=25.0,
+                beta0=beta0, beta_add=0.5, beta_period=15, beta_max=25.0,
+                si_schedule=si, cont_tol=cont_tol,
                 angle_subiters=30, angle_period=25, angle_phase_iter=150,
                 passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
@@ -192,6 +200,7 @@ def run(args):
                 volfrac=args.volfrac, penal=args.penal,
                 rho_min=0.3, rho_max=0.7,
                 optimize_density=(case == "truss"),
+                si_schedule=si,
                 passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
                 beta_start_iter=min(150, args.maxiter // 3),
@@ -319,6 +328,10 @@ def build_argparser():
     p.add_argument("--fig5", action="store_true",
                    help="faithful Adv.Mater.2022 Fig.5 setup (tip load, R=0.4cm, paper "
                         "p-continuation, additive beta->25, Ersatz 1e-4)")
+    p.add_argument("--si-schedule", action="store_true",
+                   help="SI-exact AL schedule (Eq. S11/S12): unconditional mu*=1.25 every "
+                        "5 iters, tau=0.99^k step decay, xi0=0.1, per-step continuation "
+                        "tol=0.02; recommended together with --fig5")
     p.add_argument("--no-pardiso", action="store_true")
     p.add_argument("--no-baseline", action="store_true",
                    help="skip the solid-SIMP baseline (f/f0=NaN); saves time on large meshes")

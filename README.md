@@ -24,6 +24,22 @@ pores are generated later for rendering/STL/slicing.
 
 ## Results
 
+> **Update 3 (2026-06-11): two SI-fidelity fixes after a line-by-line audit
+> against the paper's Supporting Information.** (a) The columnar wave-vector
+> sampler now follows Eq. S4 exactly: vectors restricted to the 30-degree cones
+> around the +-x1/+-x2 axes with 15% uniform leakage, instead of the previous
+> whole equatorial band (a superset that renders a transversely-isotropic
+> microstructure inconsistent with the CH_columnar_xy homogenization data).
+> Affects rendering/STL/slicing only, not the optimization. (b) New
+> `--si-schedule` flag switches the optimizer to the SI's published AL scheme
+> (Eq. S11/S12): unconditional `mu *= 1.25` every 5 iterations, deterministic
+> step decay `tau = max(0.99*tau, 0.01)`, initial Heaviside `xi = 0.1`, and
+> per-continuation-step early advance at `tol = 0.02`. The default updater
+> (ported from the released TO_Spinodal code) grows `mu` far more slowly and
+> can leave the volume constraint badly violated for hundreds of iterations;
+> on a 16x8x8 smoke mesh the SI schedule reaches |g| < 1e-3 by iteration ~60
+> while the legacy schedule is still at g ~ +0.15 (3x over budget).
+>
 > **Update 2 (2026-06-10, evening): node-ordering bug found in assembly —
 > all numerical results below are invalid and being recomputed.** A new
 > end-to-end gate (`_bar_check.py`: assembled solid bar vs analytic compliance)
@@ -154,7 +170,23 @@ Fig. 5-aligned mode:
 
 `--fig5` switches to the concentrated tip load, `R=0.4 cm` filter scaling,
 `Emin=1e-4`, paper-style p-continuation, additive Heaviside beta continuation,
-and the SI-style orientation staggered update schedule.
+and the SI-style orientation staggered update schedule. Add `--si-schedule`
+for the SI's exact AL update (Eq. S11/S12: unconditional `mu*=1.25` every 5
+iterations, `tau=0.99^k` step decay, `xi0=0.1`, continuation `tol=0.02`) —
+this enforces the volume constraint much faster than the legacy updater.
+
+The paper itself solves the cantilever on a half-width domain with 324,000
+elements (SI S4.1: 180x30x60 at 0.8 mm, so R = 0.4 cm = 5 elements). The
+corresponding configuration here is:
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 180 --nely 30 --nelz 60 --volfrac 0.05 --maxiter 1250 `
+    --case truss --fig5 --si-schedule --symmetry half-y --tag _paper
+```
+
+(~1M DOF; needs a large-memory machine or `--use-gpu`. The full SI schedule
+runs ~450 continuation + ~750 beta-ramp iterations.)
 
 The SI also solves the cantilever on a half-width domain with a symmetry plane
 parallel to `x1-x3`. This is available with:
@@ -239,7 +271,8 @@ microstructure volume is approximately `Frac`.
 
 Validated checks include H8 stiffness agreement with PyTopo3D `lk_H8`, material
 and rotation finite-difference checks, full FEA sensitivity finite differences,
-and the manufacturing level-set solid-fraction convention. `_rot_check`
+the manufacturing level-set solid-fraction convention, and the Eq. S4 columnar
+wave-vector cone restriction. `_rot_check`
 cross-validates the assembly's Voigt/Bond rotation against an independent
 4th-order tensor rotation (`np.einsum`): exact equivalence at random oblique
 angles, isotropy invariance of the solid, and the 90-degree stiff-axis swap
