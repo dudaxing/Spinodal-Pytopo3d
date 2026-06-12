@@ -101,6 +101,10 @@ centered tip load for `f` and `f0`; `f0 = 100.13` on the 72x24x24 mesh):
 | shell | `cantilever_shell_fig5v3.npz` | `Frac = 0.3` fixed | **2.90** | 2.99 |
 | truss | `cantilever_truss_fig5v3.npz` | `0.3 <= Frac <= 0.7` optimized | **0.92** | 0.86 |
 
+The finer half-domain GPU run below (Resolution sprint) improves the truss
+match to **0.866 vs the paper's 0.86** and reproduces the paper's spinodal
+density distribution (61% of solid at `Frac >= 0.65` vs the paper's >60%).
+
 Both headline results of the paper are reproduced: the fixed-porosity shell
 trades stiffness for porosity (`f/f0 > 1`), and the variable-density truss
 *outperforms* the standard solid solution (`f/f0 < 1`). The truss spinodal
@@ -163,6 +167,61 @@ Two methodological conclusions:
    that was entirely a filter artifact. `f/f0` is highly sensitive to baseline
    convergence quality; always re-verify both numerator and denominator under
    the same, gated settings.
+
+## Resolution sprint (half-domain + GPU)
+
+Combining the validated half-domain symmetry (2x compute saving, see the
+previous section) with the GPU solver allows a 1.5x finer mesh: half-domain
+`108x18x36` (effective full `108x36x36`, 70k elements, ~230k DOFs), solved
+with warm-started CuPy CG + Jacobi on an RTX 5000 Ada:
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 108 --nely 18 --nelz 36 --volfrac 0.05 --maxiter 550 `
+    --case both --fig5 --tag _fig5v5fine --symmetry half-y --use-gpu
+```
+
+| run | shell f/f0 | truss f/f0 | truss `Frac >= 0.65` |
+| --- | ---: | ---: | ---: |
+| v3 full 72x24x24 (CPU) | 2.90 | 0.92 | 37.0% |
+| v4r half 72x12x24 (CPU) | 2.91 | 0.93 | 37.1% |
+| **v5 half 108x18x36 (GPU)** | 2.75 | **0.866** | **61.2%** |
+| paper (180x60x60 half) | 2.99 | **0.86** | **>60%** |
+
+At 1.5x finer resolution the variable-density truss lands within 0.7% of the
+paper's headline ratio, and the bounds-seeking spinodal density distribution
+(S4.3) is reproduced quantitatively. A GPU-CG conditioning note: the shell
+case (uniform `Frac = 0.3`, ~12x stiffness contrast) converges much slower
+per solve than the truss case (`Frac ~ 0.5-0.7`), so wall time is dominated
+by the baseline + shell stages.
+
+![shell v5](spinodal_pytopo3d/results/fig5a_shell_v5.png)
+
+![truss v5](spinodal_pytopo3d/results/fig5d_truss_v5.png)
+
+Stiff-axis (columnar local x3) orientation field, mirrored to the full
+domain -- the separate orientation deliverable. Streamlines are tangent to
+the optimized stiff axis, cf. paper Fig. 5b/5e:
+
+![shell v5 streamlines](spinodal_pytopo3d/results/fig5b_shell_v5_streamlines.png)
+
+![truss v5 streamlines](spinodal_pytopo3d/results/fig5e_truss_v5_streamlines.png)
+
+Quantitative orientation distribution over solid elements: the stiff axis
+lies in the bending plane (out-of-plane angle median 1.4 deg shell / 0.7 deg
+truss, p90 < 9 deg), and the in-plane angle vs `x1` shows the shell hugging
+shallow arcs (95% below 30 deg) while the truss develops a distinct
+30-45 deg diagonal population (28%) along its bracing trajectories.
+
+Print-ready STL: each case exports a watertight single-body STL of the
+mirrored full geometry (decluttered marching cubes, ~8.8M triangles /
+~440 MB at `--samples-per-cell 8`, too large for git -- regenerate locally):
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.render_spinodal `
+    spinodal_pytopo3d/results/cantilever_truss_fig5v5fine.npz `
+    --m 1.5 --samples-per-cell 8 --n-waves 120 --declutter --mirror-y --save-stl
+```
 
 ## Connectivity & cleanliness
 
