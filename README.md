@@ -223,6 +223,69 @@ mirrored full geometry (decluttered marching cubes, ~8.8M triangles /
     --m 1.5 --samples-per-cell 8 --n-waves 120 --declutter --mirror-y --save-stl
 ```
 
+## Paper-resolution run (324,000 elements, GPU)
+
+The SI's exact computational mesh -- half-domain `180x30x60` (full
+`180x60x60`, 0.8 mm elements, 324,000 half-domain elements, ~1.03M DOFs) --
+is feasible on a laptop GPU with the warm-started CG solver and the
+vectorized filter (`rmin = 5` elements, 142M filter nonzeros):
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.run_cantilever `
+    --nelx 180 --nely 30 --nelz 60 --volfrac 0.05 --maxiter 550 `
+    --case both --fig5 --tag _fig5v6paper --symmetry half-y --use-gpu
+```
+
+Wall time: truss ~1.6 h, solid baseline ~1.2 h, shell ~2 h (the shell's
+`Frac = 0.3` 12x stiffness contrast dominates CG iteration counts).
+
+**The headline ratio converges to the paper's value with mesh refinement:**
+
+| effective resolution | truss f/f0 | deviation from paper |
+| --- | ---: | ---: |
+| 72x24x24 (v3) | 0.917 | +6.6% |
+| 108x36x36 (v5) | 0.866 | +0.7% |
+| **180x60x60 = paper (v6)** | **0.8587** | **-0.1%** |
+| paper | 0.86 | -- |
+
+![truss v6 paper resolution](spinodal_pytopo3d/results/fig5d_truss_v6paper_m15.png)
+
+![truss v6 streamlines](spinodal_pytopo3d/results/fig5e_truss_v6paper_streamlines.png)
+
+Two findings worth recording:
+
+1. **Design-family bifurcation, performance equivalence.** At the paper's
+   resolution our (legacy-schedule) optimizer lands in a *low-density spread*
+   family (median `Frac = 0.53`, only 12% of solid at `Frac >= 0.65`,
+   shell-like morphology) rather than the paper's *high-density discrete
+   truss* family (>60% at `Frac >= 0.65`, Fig. 5d) -- yet hits the identical
+   `f/f0 = 0.86`. The non-convex landscape supports distinct design families
+   at the same objective level: reproducing the paper's *number* does not
+   require reproducing its *morphology*, while the number itself is extremely
+   sensitive to the physics bugs fixed above. The 108-mesh run (v5) does land
+   in the paper's high-density family (61% at `Frac >= 0.65`).
+2. **Shell volume-constraint stall (legacy schedule).** At this mesh the
+   shell case under-uses its volume budget (constraint inactive: 2.67% of
+   the allowed 5%), ending at `f/f0 = 6.38` -- not comparable to the paper's
+   2.99. After the early AL volume squeeze undershoots the target, the
+   penalized (`p >= 2.5`) stiffness of new gray material leaves no usable
+   gradient to recover volume within the move limits. The coarser v3/v5
+   shells used their full budget (e.g. `meanV = 0.0497` at v5). An
+   `--si-schedule` arm (the SI's own annealing: `xi0 = 0.1`, per-step
+   early-advance tolerance 0.02) is the designed countermeasure for exactly
+   this stall mode.
+
+Print-ready STL at the paper's physical pore scale (`gamma = 6 cm^-1` on
+0.8 mm elements; 101 MB, 2.0M triangles, watertight single body, kept out
+of git):
+
+```powershell
+.\.venv\Scripts\python.exe -m spinodal_pytopo3d.render_spinodal `
+    spinodal_pytopo3d/results/cantilever_truss_fig5v6paper.npz `
+    --gamma 6 --element-mm 0.8 --samples-per-cell 4 --n-waves 120 `
+    --declutter --mirror-y --save-stl --no-png
+```
+
 ## Connectivity & cleanliness
 
 A practical concern for 3D printing is whether the optimized microstructure
