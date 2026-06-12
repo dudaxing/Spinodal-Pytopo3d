@@ -264,16 +264,31 @@ Two findings worth recording:
    require reproducing its *morphology*, while the number itself is extremely
    sensitive to the physics bugs fixed above. The 108-mesh run (v5) does land
    in the paper's high-density family (61% at `Frac >= 0.65`).
-2. **Shell volume-constraint stall (legacy schedule).** At this mesh the
-   shell case under-uses its volume budget (constraint inactive: 2.67% of
-   the allowed 5%), ending at `f/f0 = 6.38` -- not comparable to the paper's
-   2.99. After the early AL volume squeeze undershoots the target, the
-   penalized (`p >= 2.5`) stiffness of new gray material leaves no usable
-   gradient to recover volume within the move limits. The coarser v3/v5
-   shells used their full budget (e.g. `meanV = 0.0497` at v5). An
-   `--si-schedule` arm (the SI's own annealing: `xi0 = 0.1`, per-step
-   early-advance tolerance 0.02) is the designed countermeasure for exactly
-   this stall mode.
+2. **Shell volume-constraint stall (both schedules, fine mesh only).** At
+   this mesh the shell case under-uses its volume budget: after the early AL
+   volume squeeze undershoots the target, the penalized (`p >= 2.5`)
+   stiffness of new gray material leaves no usable gradient to recover
+   volume within the move limits. The coarser v3/v5 shells used their full
+   budget (e.g. `meanV = 0.0497` at v5, `f/f0 = 2.75`). An `--si-schedule`
+   arm (the SI's own annealing: `xi0 = 0.1`, per-step early-advance
+   tolerance 0.02, SI-consistent baseline `f0 = 79.58` vs legacy `81.84` --
+   only 2.8% apart, so the baseline is schedule-robust) substantially
+   mitigates but does not fully cure the stall:
+
+   | shell @ 180x30x60 | volume used (of 5%) | f/f0 |
+   | --- | ---: | ---: |
+   | legacy schedule | 2.67% | 6.38 |
+   | `--si-schedule` | 3.92% | 3.99 |
+   | paper | -- | 2.99 |
+
+   ![SI shell at paper resolution](spinodal_pytopo3d/results/fig5a_shell_v6si.png)
+
+   The SI arm recovers the classic double-horn swept-shell morphology
+   (Fig. 5a family). The shell at full paper resolution remains the one
+   number we do not match: its volume-recovery dynamics are sensitive to AL
+   implementation details that the SI under-specifies (Section S2.2), while
+   the headline truss ratio is robust across schedules
+   (legacy `f0`: 0.859; SI `f0`: 0.883; paper: 0.86).
 
 Print-ready STL at the paper's physical pore scale (`gamma = 6 cm^-1` on
 0.8 mm elements; 101 MB, 2.0M triangles, watertight single body, kept out
