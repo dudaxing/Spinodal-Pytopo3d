@@ -195,6 +195,7 @@ def run(args):
                 beta0=beta0, beta_add=0.5, beta_period=15, beta_max=25.0,
                 si_schedule=si, cont_tol=cont_tol,
                 angle_subiters=30, angle_period=25, angle_phase_iter=150,
+                init_orient_from_stress=args.init_orient_from_stress,
                 passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
             )
@@ -204,6 +205,7 @@ def run(args):
                 rho_min=0.3, rho_max=0.7,
                 optimize_density=(case == "truss"),
                 beta0=beta0, si_schedule=si,
+                init_orient_from_stress=args.init_orient_from_stress,
                 passive_z=passive_z, passive_frac_value=passive_frac_value,
                 max_iter=args.maxiter,
                 beta_start_iter=min(150, args.maxiter // 3),
@@ -335,6 +337,10 @@ def build_argparser():
                    help="SI-exact AL schedule (Eq. S11/S12): unconditional mu*=1.25 every "
                         "5 iters, tau=0.99^k step decay, xi0=0.1, per-step continuation "
                         "tol=0.02; recommended together with --fig5")
+    p.add_argument("--init-orient-from-stress", action="store_true",
+                   help="seed columnar orientation from the principal-strain direction "
+                        "of one initial solve instead of starting all angles at 0; "
+                        "mitigates orientation local minima (Senhora 2022 S2.2)")
     p.add_argument("--no-pardiso", action="store_true")
     p.add_argument("--no-baseline", action="store_true",
                    help="skip the solid-SIMP baseline (f/f0=NaN); saves time on large meshes")

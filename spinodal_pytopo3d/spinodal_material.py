@@ -191,6 +191,55 @@ def stiff_axis(alpha, beta, gamma):
     return U[:, :, 2]   # U @ [0,0,1]
 
 
+def principal_axis_angles(directions: np.ndarray):
+    """Euler angles (alpha, beta, gamma) that align the columnar stiff axis
+    (local e3) with each target direction -- the inverse of `stiff_axis`.
+
+    With U = Rx(gamma) Ry(beta) Rz(alpha) the stiff axis is
+        e3 = U @ [0,0,1] = [sin(beta), -sin(gamma) cos(beta), cos(gamma) cos(beta)]
+    (independent of alpha: rotation about the column axis is mechanically
+    near-degenerate for the transversely-isotropic columnar class). Inverting:
+        beta  = arcsin(dx);  gamma = atan2(-dy, dz);  alpha = 0 (free).
+
+    This depends only on _rot3 (the rotation construction), which the Voigt/Bond
+    and node-ordering bug fixes never touched, so the inverse is consistent with
+    the corrected forward map. Gated by `_orient_check.py`.
+
+    directions: (n,3); need not be unit, sign irrelevant (a columnar axis is a
+    line). Returns (alpha, beta, gamma), each (n,).
+    """
+    d = np.asarray(directions, float).reshape(-1, 3)
+    norm = np.linalg.norm(d, axis=1, keepdims=True)
+    d = d / np.where(norm > 1e-12, norm, 1.0)
+    dx, dy, dz = d[:, 0], d[:, 1], d[:, 2]
+    beta = np.arcsin(np.clip(dx, -1.0, 1.0))
+    cosb = np.sqrt(np.maximum(1.0 - dx * dx, 0.0))
+    safe = cosb > 1e-6                 # axis along x -> in-plane angle indeterminate
+    gamma = np.where(safe, np.arctan2(-dy, dz), 0.0)
+    alpha = np.zeros_like(beta)
+    return alpha, beta, gamma
+
+
+def principal_strain_directions(strain6: np.ndarray) -> np.ndarray:
+    """Major-principal direction of each engineering-Voigt strain vector.
+
+    strain6: (n,6) with order [exx, eyy, ezz, gyz, gxz, gxy] (engineering shear,
+    matching the assembly B-matrix). Returns (n,3) unit eigenvectors for the
+    largest-magnitude principal strain -- the "load path" direction used to seed
+    columnar orientation.
+    """
+    e = np.asarray(strain6, float).reshape(-1, 6)
+    n = e.shape[0]
+    T = np.empty((n, 3, 3))
+    T[:, 0, 0] = e[:, 0]; T[:, 1, 1] = e[:, 1]; T[:, 2, 2] = e[:, 2]
+    T[:, 1, 2] = T[:, 2, 1] = 0.5 * e[:, 3]
+    T[:, 0, 2] = T[:, 2, 0] = 0.5 * e[:, 4]
+    T[:, 0, 1] = T[:, 1, 0] = 0.5 * e[:, 5]
+    w, V = np.linalg.eigh(T)
+    idx = np.argmax(np.abs(w), axis=1)
+    return V[np.arange(n), :, idx]
+
+
 def rotation_voigt(alpha, beta, gamma):
     """Return N and (dN/dalpha, dN/dbeta, dN/dgamma), each (n,6,6).
 

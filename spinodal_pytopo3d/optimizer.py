@@ -27,6 +27,7 @@ from typing import Optional
 
 import numpy as np
 
+from . import spinodal_material as sm
 from .spinodal_fea import SpinodalFEA, SpinodalParams
 
 
@@ -200,6 +201,10 @@ class OptOptions:
     si_schedule: bool = False           # SI-exact AL schedule (Eq. S11/S12 updater)
     cont_tol: float = 0.0               # >0: advance continuation early when max|dz| < tol
                                         # (SI S4.1: tol=0.02 on the selection variables)
+    init_orient_from_stress: bool = False  # seed angles from the principal-strain
+                                        # direction of one initial solve instead of 0
+                                        # (helps the non-convex orientation problem;
+                                        # opt-in, keeps default runs bit-identical)
     # dedicated orientation optimization (aligns columnar stiff axis to stress)
     angle_subiters: int = 15
     angle_period: int = 20
@@ -239,6 +244,19 @@ def optimize(fea: SpinodalFEA, opt: OptOptions):
     z = np.full(nele, min(opt.volfrac / max(frac0, 1e-9), 1.0))
     Frac = np.full(nele, frac0)
     alpha = np.zeros(nele); beta = np.zeros(nele); gamma = np.zeros(nele)
+
+    # --- optional: seed orientation from the initial load-path direction ---
+    if opt.init_orient_from_stress:
+        p0_seed = opt.penal_steps[0] if opt.penal_steps else opt.penal
+        p_seed = SpinodalParams(penal=p0_seed, beta=opt.beta0, eta=opt.eta,
+                                Emin=opt.Emin)
+        seed = fea.analyze(z, Frac, alpha, beta, gamma, p_seed, return_strain=True)
+        dirs = sm.principal_strain_directions(seed["eps_avg"])
+        alpha, beta, gamma = sm.principal_axis_angles(dirs)
+        alpha = _wrap(alpha); beta = _wrap(beta); gamma = _wrap(gamma)
+        if opt.verbose:
+            print("[init] orientation seeded from principal-strain directions")
+
     passive_z = np.zeros(nele, dtype=bool)
     if opt.passive_z is not None:
         passive_z = np.asarray(opt.passive_z, dtype=bool).ravel()

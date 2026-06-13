@@ -174,7 +174,7 @@ class SpinodalFEA:
 
     # ---- main routine -----------------------------------------------------
     def analyze(self, z, Frac, alpha, beta, gamma, params: SpinodalParams,
-                cache=None) -> Dict:
+                cache=None, return_strain=False) -> Dict:
         nele = self.nele
         # (4) reuse frozen z/Frac-dependent fields when provided (angle sub-iters)
         if cache is None:
@@ -221,8 +221,13 @@ class SpinodalFEA:
         dvol_dz = self.filter_T(d_rho_bar * Frac / nele)
         dvol_dFrac = rho_bar / nele
 
-        return dict(
+        result = dict(
             U=U, c=c, vol=vol, rho_bar=rho_bar, E_simp=E_simp, V=V,
             dc_dz=dc_dz, dc_dFrac=dc_dFrac, dc_da=dc_da, dc_db=dc_db, dc_dg=dc_dg,
             dvol_dz=dvol_dz, dvol_dFrac=dvol_dFrac,
         )
+        if return_strain:
+            # element-averaged engineering-Voigt strain (nele,6) over 8 Gauss
+            # points, for principal-direction orientation seeding.
+            result["eps_avg"] = eps.mean(axis=1)
+        return result
