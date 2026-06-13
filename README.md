@@ -264,6 +264,31 @@ Two findings worth recording:
    require reproducing its *morphology*, while the number itself is extremely
    sensitive to the physics bugs fixed above. The 108-mesh run (v5) does land
    in the paper's high-density family (61% at `Frac >= 0.65`).
+
+   *Orientation seeding controls the family (ablation).* The opt-in
+   `--init-orient-from-stress` (seed each element's columnar axis from the
+   major principal-strain direction of one initial solve, instead of all
+   angles = 0) halves the initial compliance (238 vs 479 at iteration 0) and
+   **steers the paper-resolution run into the paper's high-density family**:
+   median `Frac` jumps from 0.53 to 0.70 (the upper bound), `Frac >= 0.65`
+   from 12% to 57%, and the morphology becomes visibly more discrete and
+   member-like (below). This confirms the bifurcation is driven by the
+   orientation initial guess. It is *not*, however, a free lunch: the
+   high-density basin it reaches is a worse local optimum at this
+   resolution+schedule (`f/f0 = 1.06` vs the unseeded `0.86`), so the
+   unseeded low-density family remains our best ratio match. The paper's
+   high-density family is reproducible *and* achieves `f/f0 < 1` for them,
+   which our AL does not match within that family -- a residual
+   optimizer-detail gap, not a physics gap.
+
+   ![seeded high-density truss, paper resolution](spinodal_pytopo3d/results/fig5d_truss_v7seed.png)
+
+   | paper-res truss (180x30x60) | f/f0 | median Frac | Frac>=0.65 |
+   | --- | ---: | ---: | ---: |
+   | unseeded (v6) | 0.86 | 0.53 | 12% |
+   | `--init-orient-from-stress` (v7) | 1.06 | 0.70 | 57% |
+   | paper | 0.86 | -- | >60% |
+
 2. **Shell volume-constraint stall (both schedules, fine mesh only).** At
    this mesh the shell case under-uses its volume budget: after the early AL
    volume squeeze undershoots the target, the penalized (`p >= 2.5`)
